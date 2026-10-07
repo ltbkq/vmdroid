@@ -8,6 +8,7 @@
 | 关联仓库 | 本仓库 `ltbkq/vmdroid`（应用） · [`ltbkq/Podroid-Debian`](https://github.com/ltbkq/Podroid-Debian)（系统镜像构建） · [`ExTV/Podroid`](https://github.com/ExTV/Podroid)（VM 功能上游，GPLv2） |
 | 许可证 | GPL-2.0-or-later（继承上游） |
 | 目标平台 | Android 8+（API 26+），arm64（aarch64） |
+| 文档语言 | **简体中文为准（主）**，英文为辅（辅译可能滞后，冲突以中文为准） |
 | 镜像格式规格 | 见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md) |
 
 ---
@@ -235,20 +236,30 @@ VM 功能 **全部沿用**，只改"系统从哪来"这一件事。
 | D. QEMU `-blockdev` slice（offset/size） | ⚠️ 后续优化 | QEMU 可行但 AVF/crosvm 无对应能力，两后端会不对称 |
 | E. `.img` 就是裸 squashfs（无 footer） | ❌ **不支持** | 无 manifest 则无 identity/版本/校验，无法做升级与重置决策（**需求 N4：只收 `.img`**）；现有 `.squashfs` 产物须经 `mkimg.sh` 封装 |
 
-### 4.3 两种消费模式
+### 4.3 两种消费模式（+ 一条降级分支）
 
 | 模式 | 触发条件 | 行为 |
 |---|---|---|
-| **direct**（默认，首选） | 文件是合法 `.img`（尾部 footer 校验通过） | 验证通过后 **原地挂载**，零额外写入 |
-| **extract**（仅种子/降级） | 用户执行"恢复出厂"；或尾部 spike 验证失败 | 只提取 **persist 种子** → `storage.img`（稀疏写出）；`rootfs` 段仍在 `.img` 内直挂 |
+| **direct**（默认，首选） | 文件是合法 `.img`（footer 校验通过） | **原地挂载**，零额外写入；`rootfs` 段始终留在 `.img` 内 |
+| **restore-seed**（恢复出厂） | 用户点"恢复出厂" | 只提取 **persist 种子** → `storage.img`（**稀疏写出**：跳过全零 run，避免实心文件，R1: B-R1-18）；`rootfs` 仍在 `.img` 内直挂 |
 
 > **N4 约束**：启动镜像**只支持 `.img` 格式**。无 footer 的裸 `.squashfs`、
 > `.tar*`、其他项目镜像**一律拒绝**并提示用 `mkimg.sh` 封装。
 > 这使 identity 恒有 manifest 来源，消灭了 §5.2 的"两套 identity"问题（R1: B-R1-5）。
 
-应用在 P0 阶段做一次真机 spike 判定 `direct` 是否可用（QEMU + AVF 各验一次）；
-不可用则落到 `extract` 模式：**`.img` 拆出 `rootfs` 独立文件 + 删除 `.img` 中冗余部分不可行**
-→ 此时磁盘占用为 2×，须在 M0 一并决策（R1: B-R1-17）。
+**降级分支 `fallback-split`（仅当 P0 spike 判定 direct 不可用时）**：
+
+```
+spike 失败（某后端不接受尾随数据）
+  → 方案 B：安装期把 rootfs 拆成独立文件，vdb 指向拆出文件，.img 仅作容器
+     · 峰值/长期占用 = 2×（.img + rootfs 文件并存，因 .img 仍是激活对象与校验来源）
+     · ★ 需重新决策 B-R1-17（M0 退出条件之一）：A) 接受 2×；B) 拆分后删除 .img、
+       把 .meta.json 迁到拆出文件（则"单文件分发"仅限分发阶段，安装后变两文件）
+  → 或：中止 direct 特性，改"导入即拆分"为唯一路径
+```
+
+`fallback-split` **不改变格式与导入白名单**（输入仍是 `.img`），只改安装后的落盘形态。
+恢复出厂与降级分支互不相干（前者只提种子）。
 
 ### 4.4 版本与兼容协商
 
@@ -264,14 +275,14 @@ manifest 携带，激活前由 `BootGuard` 拦截：
 
 ### 4.5 首发镜像：`debian.img`（最小化）
 
-首发**只做一个**系统文件，命名固定为 `debian.img`（目录中的 `image_id`
-建议 `debian-minimal-arm64`，`identity = debian:trixie`）。
+首发**只做一个**系统文件，命名固定为 `debian.img`；`image_id` **固定为**
+`debian-minimal-arm64`（§2.3 命名基线），`identity = debian:trixie`。
 
 **定位**：能开机、能进终端、能联网的**最小可用 Debian**，其余功能按需后加。
 
 | 维度 | 首发 `debian.img` | 对比当前 `Podroid-Debian` 全量构建 |
 |---|---|---|
-| 包数量 | 目标 ~90–120（minbase + 契约组件） | 283 |
+| 包数量 | **~210–250**（deps 闭包实测 223 / 含 Recommends 247；CI 断言 ≤260） | 362（当前全量构建） |
 | 体积 | 目标 **≤ 150 MB**（zstd-19，**含 kernel/initrd payload**，R-16） | 345 MB（329 MiB，对比基线） |
 | init | systemd（`systemd-sysv`） | 同 |
 | SSH | dropbear（契约要求，`Ready!` 前置） | 同 |
@@ -312,7 +323,7 @@ pulseaudio, pulseaudio-utils          → podroid-pulse（:4713，音频契约�
 
 ```
 root   密码 123   # 与上游 Podroid-Debian 一致，保留用于 adb/调试/回归脚本
-ltbkq  密码 123   # 日常账户，wheel/sudo 组，NOPASSWD
+ltbkq  密码 123   # 日常账户，sudo 组，NOPASSWD
 dropbear 允许 root + ltbkq 两账户密码登录（两者都能 ssh 进入）
 ```
 
@@ -415,12 +426,17 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
    # dropbear（/etc/default/dropbear）：
    DROPBEAR_EXTRA_ARGS=""   # 不加 -w/-g/-s/-B：dropbear 默认即允许 root 与密码登录
                             #   -w=禁root -g=禁root密码 -s=禁密码 -B=允许空密码(禁用)
-   # ★ host 私钥不得烘焙进镜像（R1: B-R1-2）：
+   #   ★ host 私钥不得烘焙进镜像（R1: B-R1-2 / R2: B-R2-4 定案）：
    rm -f /etc/dropbear/dropbear_*_host_key*
-   #   首次启动由 podroid-bootstrap 检测缺失并 dropbearkey -t ed25519,rsa 生成
-   #   （/etc 走 overlay，copy-up 到 persist；或 dropbear 以 -R 延迟加载）
+   #   定案机制 = podroid-bootstrap 内 dropbearkey（与上游 Alpine 行为一致），
+   #   在 `podroid-bootstrap` 脚本中新增：缺失则
+   #     dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key
+   #     dropbearkey -t rsa     -f /etc/dropbear/dropbear_rsa_host_key
+   #   （/etc 走 overlay → copy-up 到 persist；不采用 dropbear -R 分支）
    ```
-   写入点与现有 `build/rootfs-finalize.sh`（当前只设 root 密码）合并。
+   写入点在现有 `build/rootfs-finalize.sh` 的 dropbear 段内追加 `rm -f`；
+   `dropbearkey` 逻辑**新增到** `rootfs/usr/local/lib/podroid/podroid-bootstrap`
+   （该脚本目前既不删也不生成 key —— 属两处需实现的 guest 改动，M2 交付，R2: B-R2-4）。
 6. manifest 声明（应用据此在 UI 显示"SSH 登录帮助"，见 §8.3）：
    ```jsonc
    "accounts": {
@@ -468,7 +484,7 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 
 | 状态 | 含义 | UI 表现 |
 |---|---|---|
-| `ABSENT` | 未安装任何镜像 | Home 禁用启动按钮；进入引导页（下载/导入） |
+| `ABSENT` | 未安装任何镜像 | Home 显示空态块、**启动按钮隐藏**；进入引导页（下载/导入） |
 | `DOWNLOADING` | `.part` 下载中，支持续传 | 进度条、速度、剩余时间、暂停/继续 |
 | `IMPORTING` | SAF 选择的文件流式拷贝进 `images/` | 进度条（按已拷贝字节） |
 | `VERIFYING` | 流式 sha256 + manifest 校验 | 校验动画（与下载/导入同一遍读取完成，见 §6.3） |
@@ -508,7 +524,8 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 
 ### 5.3 激活与回滚
 
-- `images/active.json` 记录 `{image_id, identity, sha256, activated_at}`。
+- `images/active.json` 记录 `{image_id, identity, rootfs_sha256, activated_at}`
+  （字段名与 §2.3 一致；**唯一写者 = `SystemImageRepo`**，R2: A-R2-6/D-R2-7）。
 - 允许保留多个已安装镜像（建议上限 2，超出时提示删除最旧的非激活镜像）。
 - 回滚 = 激活另一张已安装镜像（同 identity 无需重置）。
 - v1 不做 A/B 自动回滚（启动失败自动切回），列入 §15 开放问题。
@@ -555,7 +572,7 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
       "arch": "arm64",
       "channel": "stable",
       "url": "https://github.com/ltbkq/Podroid-Debian/releases/download/v34/debian.img",
-      "size": 155_189_248,
+      "size": 148951040,
       "sha256": "…64 hex…",
       "app_min_version_code": 1,
       "notes": "最小化：systemd + dropbear(root/123, ltbkq/123) + Xvnc/pulseaudio；无容器栈"
@@ -565,8 +582,12 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 ```
 
 > `image_id` 必须匹配 `^[a-z0-9][a-z0-9._-]{0,63}$`（**R1: B-R1-16**，防止 QEMU
-> `-drive` 选项注入：路径中出现 `,` 会截断选项）。不匹配的条目在导入/下载落盘前拒绝。
-> `size` 示例满足 footer 对齐：`file_size = footer_offset + 4096`，`footer_offset` 为 1 MiB 边界。
+> `-drive` 选项注入：路径中出现 `,` 会截断选项）。**导入/下载落盘路径一律由
+> 校验通过的 `manifest.image.id` 决定，不使用源文件名**（R2: B-R2-5）。
+> `size` 约束（R2: A-R2-2/B-R2-3）：`manifest_offset` 为 1 MiB 边界；
+> `footer_offset = align4k(manifest_offset + manifest_size)`（**footer 仅 4 KiB 对齐**，
+> 永远不是 1 MiB 边界）；`file_size = footer_offset + 4096`。
+> 上例为合法可构造值，实际以 `mkimg` 实算为准（JSON 示例**不得**使用数字下划线，R2: A-R2-15）。
 > `app_min_version_code` 与 manifest 内 `app.min_version_code` **同义**（catalog 扁平 / manifest 嵌套）。
 
 - **信任模型 v1**：HTTPS + 目录内 `sha256`（下载后再校验一遍，防 CDN/传输篡改需目录签名）。
@@ -643,7 +664,7 @@ args += "-drive"; args += "file=${rootfsImg},if=none,id=drive2,format=raw,readon
 | `QemuEngine.kt:558-573` | `storage.img` 逻辑 **不变**（种子恢复在镜像管理器里做，不进引擎） |
 | `QemuEngine.kt:532-533, 552-556` | 内核/initrd **不变**（仍来自 APK 资产） |
 | `QemuEngine.kt:537-547` | cmdline 不变（`console=ttyAMA0`、`podroid.*`）；可选追加 `podroid.image_identity=`（§5.2） |
-| `QemuEngine.kt:585-620` | 9p 下载共享、SLIRP 端口转发 **不变** |
+| `QemuEngine.kt:585-621` | 9p 下载共享、SLIRP 端口转发 **不变** |
 
 ### 7.2 AvfEngine（上游 `engine/avf/AvfEngine.kt`）
 
@@ -651,7 +672,7 @@ args += "-drive"; args += "file=${rootfsImg},if=none,id=drive2,format=raw,readon
 |---|---|
 | `AvfEngine.kt:1027-1028` | `File(filesDir,"alpine-rootfs.squashfs")` + `require(exists)` → `systemImageRepo.activeRootfsPath()`；错误转成 UI 可读状态而非 `IllegalArgumentException` |
 | `AvfEngine.kt:1084-1085` | `addDisk(storage, writable=true)` / `addDisk(squashfs, writable=false)` 的路径来源改为仓库 |
-| `AvfEngine.kt:929-962` | `ensureStorageImage()` **不变**（sparse 创建、只增不减、`resize2fs` 由 guest 做） |
+| `AvfEngine.kt:929-965` | `ensureStorageImage()` **不变**（sparse 创建、只增不减、`resize2fs` 由 guest 做） |
 
 ### 7.3 PodroidApplication（上游 `:103-108`）
 
@@ -672,7 +693,7 @@ val tasks = listOf(
 
 | 条件 | 行为 |
 |---|---|
-| 未安装镜像 | 引导页：**下载推荐镜像** / **从文件导入**；Home 启动按钮禁用 |
+| 未安装镜像 | 引导页：**下载推荐镜像** / **从文件导入**；Home 显示 §8.2 空态块，**启动按钮隐藏** |
 | `.meta.json` 校验失败 | `CORRUPT`：重新下载 / 删除重导 |
 | `app_min_version_code > 当前版本` | 拒绝激活，提示升级应用 |
 | `arch != arm64` / `format_version` 过新 | 拒绝激活 |
@@ -692,7 +713,7 @@ val tasks = listOf(
 | 项 | 规定 |
 |---|---|
 | 设计系统 | **Material 3**（上游已用 Compose + M3，不引入第二套） |
-| 间距序列 | 仅 `4 / 8 / 16 / 24 / 32 dp`，禁止 13dp、17dp 等散值 |
+| 间距序列 | 仅 `4 / 8 / 12 / 16 / 24 / 32 dp`（**12 专用于卡片间距**），禁止 13dp、17dp 等散值 |
 | 页面水平内边距 | 16dp；卡片间距 12dp；区块标题↔内容 8dp |
 | 触控目标 | ≥ 48×48dp（图标按钮用 `IconButton` 标准尺寸） |
 | 列表行高 | 单行 56dp / 双行 72dp / 含进度条 88dp（统一，不逐页调） |
@@ -775,10 +796,10 @@ setup ──▶ home ──┬─▶ terminal
 | 虚拟机运行中 | **禁用**并说明"请先停止虚拟机"（v1 不做热切换） |
 | 选中未激活镜像 · 判据相同 | 直接改写 `active.json`，提示"下次启动生效" |
 | 选中未激活镜像 · 需重置 | 先弹 §8.5 确认框，确认后才切换 |
-| 仅 1 个镜像 | **仍显示**选择器（布局稳定），下拉内含"导入/下载"入口 |
-| 校验中 | 20dp `CircularProgressIndicator` + "校验中"，控件禁用 |
-| `CORRUPT` 项 | 标红 + ⚠；选中后主按钮变为"重新校验 / 重新下载" |
-| 完全无镜像 | 整块替换为空态双入口；**启动按钮隐藏**（不显示必然失败的按钮） |
+| 仅 1 个镜像 | **仍显示**选择器（布局稳定），下拉项含"导入/下载"入口 |
+| 校验中 | 20dp `CircularProgressIndicator` + 文字"校验中"，控件禁用 |
+| `CORRUPT` 项 | **颜色 + 图标 + 文字**三重编码：标红 + ⚠ + 文字"已损坏"；选中后主按钮变为"重新校验 / 重新下载" |
+| 完全无镜像 | 整块替换为空态双入口（`[下载 debian.img（Filled）]`、`[从文件导入 .img（Text）]`）；**启动按钮隐藏**（不显示必然失败的按钮） |
 | 加载失败（目录/列表异常） | 选择器保留上次值 + 顶部 inline error，不塌陷布局 |
 
 **为什么放 Home**：换系统后用户要立即看到"现在跑的是哪个"；Home 是启动动作发生地，
@@ -788,26 +809,39 @@ setup ──▶ home ──┬─▶ terminal
 
 ```
 ┌─ 系统镜像 ────────────────────────────────┐
-│ ● 使用中  Debian 13 (trixie) · 最小化      │
-│   debian-minimal-arm64 · 148 MB            │
-│   debian:trixie · system_version 34        │
-│   [立即校验] [恢复出厂(用种子)] [移除]       │
+│ Debian 13 (trixie) · 最小化                │  ← ①名称
+│ debian-minimal-arm64 · 148 MB              │  ← ②image_id · 体积
+│ debian:trixie · system_version 34          │  ← ②版本信息
+│ ● 使用中                                   │  ← ③状态（颜色+图标+文字三重编码）
+│ [立即校验] [恢复出厂(用种子)] [移除]         │  ← ④操作（无 FilledButton：卡片内均 TextButton）
 │                                            │
-│ ○ 已安装  Debian 13 (trixie) · 桌面版       │
-│   debian-desktop-arm64 · 312 MB            │
-│   [设为启动镜像] [校验] [移除]               │
+│ Debian 13 (trixie) · 桌面版                 │
+│ debian-desktop-arm64 · 312 MB              │
+│ ○ 已安装                                   │
+│ [设为启动镜像（Filled）] [校验] [移除]       │  ← 本屏唯一主操作
 │                                            │
 │ ── 在线目录 · Podroid-Debian ──            │
-│   Debian 13 (trixie) · 最小化    v34        │
-│   148 MB · sha256 ✓              [下载]    │
-│   ▓▓▓▓▓▓▓░░░ 68% · 4.2 MB/s · 剩 12s      │
+│ Debian 13 (trixie) · 最小化    v34          │
+│ 148 MB · sha256 ✓              [下载]      │
+│ ▓▓▓▓▓▓▓░░░ 68% · 4.2 MB/s · 剩 12s        │
 │                                            │
-│ [从文件导入 .img…]    [刷新] [订阅设置]      │
+│ [从文件导入 .img…]    [刷新] [订阅设置]      │  ← 均 TextButton / 图标按钮
 └────────────────────────────────────────────┘
 ```
 
 **排版规则**：卡片 = 已安装镜像（可操作），列表行 = 在线目录（只读 + 下载）；
 两类用**分区标题 + 分隔线**区分，不混排（避免"哪个已装哪个没装"歧义）。
+**卡片信息顺序恒为 名称 → 版本/体积 → 状态 → 操作**（§8.0②），且**每屏只有一个
+`FilledButton`**（上例 = "设为启动镜像"；使用中卡片无主按钮）。
+
+**四态设计（§8.0④）**
+
+| 控件 | 正常 | 禁用 | 加载中 | 错误 |
+|---|---|---|---|---|
+| `[下载]` | 可点 | 非 Wi-Fi 且设置要求时（文案"仅 Wi-Fi"） | 行内进度条 + %/速度/剩余 | "下载失败，点击重试"（可执行文案） |
+| `[立即校验]` | 可点 | 镜像 `CORRUPT` 时 | 20dp 进度圈 + "校验中" | "校验失败，建议重新下载" |
+| `[从文件导入…]` | 可点 | 无（始终可用） | 导入进度条 | "非 .img 格式，请用 mkimg.sh 封装" |
+| `[刷新]`（离线） | 可点 | 断网时置灰 + "离线" | 顶栏小进度 | inline error，**列表不塌陷** |
 
 ### 8.4 首次启动（无镜像）
 
@@ -816,7 +850,7 @@ setup ──▶ home ──┬─▶ terminal
   → Setup 第 2 步（复用上游 setup wizard 逻辑）
       ① 下载推荐镜像（默认选中，显示体积/网络提示）
       ② 从文件导入（**仅 `.img`**；其他格式提示用 `mkimg.sh` 封装）
-      ③ 稍后再说（Home 可浏览，启动按钮禁用）
+      ③ 稍后再说（Home 可浏览，显示 §8.2 空态块，**启动按钮隐藏**）
   → 完成后进入正常 Home
 ```
 
@@ -952,9 +986,9 @@ VMDroid 应用侧配套（M7）：
 
 | 仓库 | 职责 | 产物 |
 |---|---|---|
-| `ltbkq/vmdroid`（本仓库） | VM 应用 + 镜像管理 | `vmdroid-<ver>.apk`（≈70 MB）、镜像格式**解析/校验**（Kotlin `VmdImageCodec`，与 `mkimg.sh` 互操作） |
-| `ltbkq/Podroid-Debian` | 构建 Guest rootfs、打包 `.img` | `*.img`、`catalog.json`、Release 资产 |
-| `ExTV/Podroid` | 上游 VM 功能 | fork 源头 |
+| `ltbkq/vmdroid`（本仓库） | VM 应用 + 镜像管理 | `vmdroid-<ver>.apk`（≈70 MB）、`VmdImageCodec`（解析/校验，**应用不写 `.img`**）、`tools/pc-run.sh`（用户入口，随 Release 分发） |
+| `ltbkq/Podroid-Debian` | 构建 Guest rootfs、**固件**、打包 `.img` | `debian.img`、`catalog.json`、`vmlinuz-virt`/`initrd.img` Release 资产（§12.4）、`mkimg.sh`、`catalog.sh`、`pc-boot-smoke.sh`、首启 host key 逻辑 |
+| `ExTV/Podroid` | 上游 VM 功能 + 内核构建脚本 | fork 源头；`build-all.sh kernel\|initramfs\|qemu` |
 
 `Podroid-Debian` 侧需要新增（不改现有流水线）：
 
@@ -990,24 +1024,42 @@ tools/boot-test.sh ${PKG:-io.github.ltbkq.vmdroid.debug}   # 冒烟（R1: B-R1-8
 **目标**：`debian.img` 单文件拷到任意 Linux PC，**不装 APK、不装 Android SDK**，
 一条命令进入 guest。这是 `.img` 的一等验收项（R-16）。
 
-**依赖**：`qemu-system-aarch64`（`apt install qemu-system-arm`）、`python3`（仅用于提取段）。
+**依赖**：`qemu-system-aarch64`（`apt install qemu-system-arm`，版本下限待 M0 实测）、
+`python3`、`mkfs.ext4`（`e2fsprogs`）、`ssh`。
+
+**归属（R2: C-R2-3/D-R2-2）**：`tools/pc-run.sh` 归 **vmdroid 仓库**（用户入口），
+与 `.img` 一起**随 Podroid-Debian Release 分发**（Release 资产同时挂脚本，用户两条命令拿到全部）；
+`tools/pc-boot-smoke.sh` 归 **Podroid-Debian CI**，是 `pc-run.sh --smoke --timeout <N>` 的同一实现
+（提取与启动逻辑**单一来源**，不复制两份）。
 
 **提供两种启动方式**（任选，等价）：
 
 ```sh
-# 方式 A（推荐）：随仓库脚本 —— 读 footer 提取 kernel/initrd 到临时目录再起 QEMU
+# 方式 A（推荐）：脚本 —— 校验 footer → 提取 kernel/initrd → 建 storage.img → 起 QEMU
 tools/pc-run.sh debian.img
 
-# 方式 B：手工（等价命令，也用于文档自证）
-python3 - <<'EOF'   # 或用 dd 按 footer 偏移提取
-import struct,sys
-f=open("debian.img","rb"); f.seek(-4096,2); ft=f.read(4096)
-ko,ks=struct.unpack_from("<QQ",ft,172); io_,isz=struct.unpack_from("<QQ",ft,220)
-# 提取 kernel -> vmlinuz，initrd -> initrd.img
+# 方式 B：手工（等价命令，用于文档自证）
+#  1) vda 必须先格式化，否则 QEMU 建 0 字节文件 → init-podroid 挂载失败（R2: B-R2-16）
+truncate -s 4G storage.img && mkfs.ext4 -F storage.img
+#  2) 按 footer 偏移提取（172=kernel_offset, 220=initrd_offset；须校验双魔数 + sha256）
+python3 - <<'EOF'
+import struct, hashlib, sys
+img = open("debian.img","rb"); img.seek(-4096, 2); ft = img.read(4096)
+assert ft[0:8] == b"VMDIMG01" and ft[4088:4096] == b"VMDIMG01", "bad footer"
+size, = struct.unpack_from("<Q", ft, 16)
+import os; assert size == os.path.getsize("debian.img"), "truncated"
+flags, = struct.unpack_from("<I", ft, 168); assert flags & 0x6 == 0x6, "no kernel/initrd"
+for off, ln, sha, name in ((172,180,188,"vmlinuz"), (220,228,236,"initrd.img")):
+    o, s = struct.unpack_from("<QQ", ft, off); h = ft[sha:sha+32]
+    img.seek(o); data = img.read(s)
+    assert hashlib.sha256(data).digest() == h, f"{name} sha256 mismatch"
+    open(name, "wb").write(data)
 EOF
 
+#  3) 启动（★ 必须带 -serial 与 -display none，否则 Ready! 无处输出 / 无头机报错）
 qemu-system-aarch64 \
   -M virt,gic-version=3 -cpu max -accel tcg,thread=multi \
+  -display none -serial mon:stdio \
   -smp 4 -m 4096 \
   -kernel vmlinuz -initrd initrd.img \
   -append "console=ttyAMA0 mitigations=off androidip=10.0.2.15 podroid.x11.dpi=96" \
@@ -1015,7 +1067,7 @@ qemu-system-aarch64 \
   -device virtio-blk-pci,drive=drive1 \
   -drive file=debian.img,if=none,id=drive2,format=raw,readonly=on \
   -device virtio-blk-pci,drive=drive2 \
-  -netdev user,id=net0,ipv6=off,hostfwd=tcp:127.0.0.1:9922-:22,hostfwd=tcp:127.0.0.1:5900-:5900 \
+  -netdev user,id=net0,ipv6=off,hostfwd=tcp:127.0.0.1:9922-:22,hostfwd=tcp:127.0.0.1:5900-:5900,hostfwd=tcp:127.0.0.1:4713-:4713 \
   -device virtio-net-pci,netdev=net0
 ```
 
@@ -1023,16 +1075,18 @@ qemu-system-aarch64 \
 
 | 项 | 说明 |
 |---|---|
-| 内核来源 | **`.img` 自带**（footer `kernel_*`），与 APK 内置者**同源同版本**（发布流水线一次构建两处使用） |
-| `vda` | 脚本首次运行 `truncate + mkfs.ext4` 创建 `storage.img`（**不用** seed，seed 只给 Android 恢复出厂）；已存在则复用 |
-| 启动契约 | 完全相同：`init-podroid` 挂 `vda`/`vdb` → overlay → `Ready!`（PC 端同样可用 `adb`-外的 `ssh -p 9922` 验证） |
+| 内核来源 | **`.img` 自带**（footer `kernel_*`）；与 APK 内置者同源同版本，产物流水线见 §12.4 |
+| `vda` | 脚本首次 `truncate -s 4G + mkfs.ext4` 创建 `storage.img`（**不用** seed，seed 只给 Android 恢复出厂）；已存在则复用 |
+| 串口/显示 | `-display none -serial mon:stdio` 为**必选项**（R2: B-R2-7）：`ttyAMA0` 不接 chardev 则 `Ready!` 无输出，无头机缺显示后端会直接退出 |
+| hvc0–2 | 上游 `-device virtio-serial-pci` + 三个 `virtconsole` 才有 `/dev/hvc0-2`。**PC 端默认补上**（脚本负责），否则 `podroid-getty@hvc0` 会无限重启空烧 vCPU（R2: B-R2-8）。控制台验收仍走 `ttyAMA0`（serial） |
+| 启动契约 | 挂载与标记路径**相同**：`init-podroid` 挂 `vda`/`vdb` → overlay → `Ready!` |
 | 架构 | x86_64 PC 走 **TCG**（慢但可用）；arm64 Linux 主机可加 `-accel kvm -cpu host` 提速 |
-| 控制台 | `-serial mon:stdio` 或脚本默认落 `console.log`；`Ready!` 是验收断言 |
-| 端口 | 只绑回环 `127.0.0.1`，与 §10.1 一致；SSH 仍 `ssh -p 9922 ltbkq@localhost`（pw `123`） |
-| 不承诺 | PC 端**不做**图形前端、不做 USB/9p 透传；X11/VNC `:5900` 可连但需自行起 viewer |
+| 端口 | 只绑回环 `127.0.0.1`（9922/5900/4713 三者齐全，与 §4.8 一致）；`ssh -p 9922 ltbkq@localhost`（pw `123`） |
+| 阈值 | **90s 内出现 `Ready!`**（与 `boot-test.sh BOOT_TIMEOUT=90` 对齐；原 60s 无实测依据，M0 spike 实测后可再收紧，R2: B-R2-9） |
+| 不承诺 | PC 端**不做**图形前端、不做 USB/9p 透传；`:5900` 可连但需自备 viewer |
 
-**验收（R-16）**：`tools/pc-run.sh debian.img` 在 x86_64 Ubuntu/Debian 上
-**60 秒内**输出 `Ready!`，且 `ssh -p 9922 ltbkq@127.0.0.1`（pw `123`）成功。
+**验收（R-16）**：`tools/pc-run.sh debian.img` 在 x86_64 Ubuntu/Debian 上 **90 秒内**输出 `Ready!`，
+且 `ssh -p 9922 ltbkq@127.0.0.1`（pw `123`）成功 —— 两条断言**都必须进 CI**（`pc-boot-smoke.sh`）。
 
 ### 11.5 `.img` 的可移植性（附带收益）
 
@@ -1068,12 +1122,32 @@ qemu-system-aarch64 \
 - CI（GitHub Actions，arm64 runner 或现有 local/docker 路径）：
   构建 rootfs → `mkimg` → 计算 sha256 → 上传 Release → 生成 `catalog.json`。
 
+### 12.4 固件产物流水线（kernel / initrd / qemu，R2: D-R2-1 Blocker）
+
+**问题**：`vmlinuz-virt`、`initrd.img`、`qemu/*.so` 在上游是 **gitignored 的生成物**
+（需 `./build-all.sh kernel|initramfs|qemu`，Docker 构建），两个仓库都没有源文件；
+但 M1（APK 打包）、M2（`mkimg --kernel`）、R-16（PC 启动）都要用它们。
+
+**决策**：
+
+| 制品 | 构建方 | 分发方式 | 消费方 |
+|---|---|---|---|
+| `vmlinuz-virt` + `initrd.img` | **Podroid-Debian CI** 调用上游 `build-all.sh kernel initramfs`（Docker + binfmt），产物落 `out/` | ① 打进 `debian.img`（`mkimg --kernel/--initrd`）；② 作为 **Release 资产**单独上传（含 `sha256sums.txt`） | vmdroid APK `assets/`（CI 下载 + 校验 sha256）；`pc-run.sh` 从 `.img` 提取 |
+| `qemu/*.so` + `jniLibs` | 同上（`build-all.sh qemu`） | Release 资产 + `sha256sums.txt` | vmdroid CI 下载入 `jniLibs/arm64-v8a/`（校验 16KB 对齐） |
+
+- **同源保证**：APK 与 `.img` 的内核来自**同一次 CI 构建的同一批 sha256**；
+  构建期把 `kernel_version` + `kernel_sha256` 写入 APK 的
+  `assets/firmware.properties`，供 §4.4 比对 manifest `contract.kernel.image_sha256`。
+- **M1 阻塞解除**：M1 可先用"从已装上游 APK 提取"的资产起步（同 PLAN.md 做法），
+  M2 起改由 CI 供给。
+- 上游内核源码见 `ExTV/Podroid`（GPLv2，`build-all.sh kernel`），须在 Release 中提供源码链接。
+
 ### 12.3 发布物
 
 | 产物 | 位置 | 说明 |
 |---|---|---|
 | `vmdroid-<ver>.apk` | 本仓库 Release | ≈70 MB |
-| `debian.img`（首发最小化，**含 kernel/initrd payload**） | Podroid-Debian Release | **≤150 MB**（含内核 ~150–170 MB 上限），单文件系统，PC 可启动（R-16） |
+| `debian.img`（首发最小化，**含 kernel/initrd payload**） | Podroid-Debian Release | **≤ 150 MB**（唯一阈值，含内核；见 G7/§4.5/§13.1），单文件系统，PC 可启动（R-16） |
 | 后续 `debian-*.img` / `ubuntu.img` | 同上 | 按 §4.7 路线图逐个上架 |
 | `catalog.json`(+ `.sig`) | 同上 `latest/download/` | 应用默认订阅 |
 | 源码 | 两仓库 | GPLv2 §6/§63 合规（源码 + 构建说明） |
@@ -1089,12 +1163,12 @@ qemu-system-aarch64 \
 | 层 | 内容 | 归属 |
 |---|---|---|
 | 构建产物 | **APK 资产清单**：仅 `vmlinuz-virt`/`initrd.img`/`qemu/`，**无 `*.squashfs`**，体积 ≤ 80 MB（G1/R-01） | vmdroid CI |
-| **PC 冒烟（R-16）** | `mkimg` 自检：提取 `.img` 内 kernel/initrd → 起 `qemu-system-aarch64` 60s 断言 `Ready!`（`pc-boot-smoke.sh`） | Podroid-Debian CI |
+| **PC 冒烟（R-16）** | `mkimg` 自检：提取 `.img` 内 kernel/initrd → 起 `qemu-system-aarch64` **90s** 内断言 `Ready!` **且** `ssh -p 9922` 可登录（`pc-boot-smoke.sh` = `pc-run.sh --smoke`） | Podroid-Debian CI |
 | 单元（JVM） | `VmdImageCodec`：往返编解码、footer 定位、字段缺省、截断/损坏/错位/越界拒绝、`ssh_port≠22` 拒绝；identity 判据全表（§5.2 含内容优先与硬判据）；状态机迁移；流式 sha256 | vmdroid |
 | 工具侧 | `mkimg.sh` ↔ Kotlin codec **互操作**；测试向量入库；catalog schema 前向兼容（未知字段/新 image 条目） | vmdroid + Podroid-Debian |
 | 下载 | Range 续传（含 416 回退）、ETag 变化重下、`.part` 断点恢复、校验失败清理 | vmdroid |
 | 镜像内容 | 镜像检查脚本：`getent passwd ltbkq`、`visudo -c`、dropbear 允许 root 与密码登录、**两账户凭密码 `123` 可认证**（`openssl passwd -6 123` 比对 shadow 或直接以登录成功为真值）、`ss -tln` 断言 guest **:22**、`/etc/dropbear/` **无** `*_host_key` 私钥 | Podroid-Debian CI |
-| 最小化负面断言 | dpkg **不含** `docker.io/podman/lxc/xfce4/lightdm`；包数 90–120；`.img ≤ 150 MB` | Podroid-Debian CI |
+| 最小化负面断言 | dpkg **不含** `docker.io/podman/lxc/xfce4/lightdm`；包数 **≤260**（目标 210–250）；`.img ≤ 150 MB` | Podroid-Debian CI |
 | 契约指纹 | `.img` 内 `/usr/local/lib/podroid/*`、`podroid-*`、控制台标记串清单比对（防契约漂移） | Podroid-Debian CI |
 | 回归（沿用） | `Podroid-Debian/tests/test_dns.sh`、`tools/boot-test.sh`（轮询 `Ready!`；**参数化 `PKG=${1:-io.github.ltbkq.vmdroid.debug}` 并自建 `adb forward tcp:9922 tcp:9922`**，R1: B-R1-8） | Podroid-Debian |
 
@@ -1119,8 +1193,8 @@ qemu-system-aarch64 \
 | `ltbkq` 免密 sudo 可用（`sudo -n true`） | ✅ | ✅ |
 | `debian.img`（Xvnc 有、容器无）→ 容器能力降级不报错；X11 连 `:5900` 成功 | ✅ | ✅ |
 | **启动镜像选择控件（§8.2）**：运行中禁用 / 空态双入口 / `CORRUPT` 项标红 / 切换后下次启动生效 | ✅ | ✅ |
-| **UI 设计原则（§8.0）**：light+dark 双主题、8dp 间距、四态控件、文案走 `values-zh` | ✅ | ✅ |
-| **R-16 PC 启动**：`tools/pc-run.sh debian.img`（x86_64 Linux, TCG）→ 60s 内 `Ready!`，`ssh -p 9922 ltbkq@127.0.0.1`（pw `123`）成功 | ✅ 必测 | n/a（PC 用例） |
+| **UI 设计原则（§8.0 逐条）** | 双主题 / 间距序列 / 四态 + 错误态可执行文案 / 卡片顺序与唯一 FilledButton（截图评审）/ 破坏性二次确认 / `lintHardcodedText` 零告警 | ✅ | ✅ |
+| **R-16 PC 启动**：`tools/pc-run.sh debian.img`（x86_64 Linux, TCG）→ **90s** 内 `Ready!`，`ssh -p 9922 ltbkq@127.0.0.1`（pw `123`）成功 | ✅ 必测 | n/a（PC 用例） |
 | 终端 / VNC / 端口转发 / host bridge / USB | ✅ | ✅（USB QEMU 专属） |
 
 ### 13.3 P0 风险 spike（先于编码，M0 内）
@@ -1141,15 +1215,15 @@ qemu-system-aarch64 \
 | 阶段 | 内容 | 退出标准 | 预估 |
 |---|---|---|---|
 | **M0** 规格冻结 | 本设计评审（R1–R3）+ P0 spike（§13.3）+ B-R1-17 占用决策 | spike 结论：direct 可行 / 需 extract 及其占用方案 | 1–2 天 |
-| **M1** 骨架 | fork 上游 → 改名/包名/品牌 → 移除 rootfs 资产 → §8.0 UI 基线（双主题/8dp/四态） | APK ≈70 MB 可安装；无镜像时进引导页 | 3 天 |
-| **M2** 格式与工具 | `VmdImageCodec` + `mkimg.sh`（含 `--kernel/--initrd`）+ `manifest.json` + `tools/pc-run.sh` + 测试向量 | 互操作测试通过；**R-16 PC 冒烟 `Ready!`**；账户规范（§4.8）在构建脚本落地 | 3 天 |
+| **M1** 骨架 | fork 上游 → 改名/包名/品牌 → 移除 rootfs 资产 → §8.0 设计系统落点（主题/token/间距常量 + **Home 页四态**；全站四态审计归 M6） | APK ≈70 MB 可安装；`images/` 为空时进 Setup 占位 + 启动按钮隐藏（**BootGuard 简版：仅 ABSENT 判定**，完整校验归 M3，R2: D-R2-4） | 3 天 |
+| **M2** 格式与工具 | **vmdroid**：`VmdImageCodec` + 测试向量消费；**Podroid-Debian**：`mkimg.sh`（`--kernel/--initrd`）、`manifest.json`、**`packages-minimal.list` + 首个 `out/debian.img`**、账户规范（§4.8 含 host key 首启生成）、`pc-run.sh`/`pc-boot-smoke.sh`、`graft.sh` 废除、`boot-test.sh` 参数化 | 互操作测试通过；**R-16 PC 冒烟 `Ready!` + ssh**；镜像 ≤150 MB、包数 ≤260、负面断言通过 | 4–5 天（R2: D-R2-3/D-R2-14 建议拆 M2a/M2b） |
 | **M3** 镜像管理 | 导入/校验/激活/删除/BootGuard/identity 判据 + **§8.2 启动镜像选择控件** | §13.2 中"导入/E2E 换系统/损坏/identity"用例通过 | 3–4 天 |
 | **M4** 下载 | 目录 + 断点续传 + 通知进度 + §8.3 镜像页 | 60% 杀进程续传用例通过 | 2–3 天 |
 | **M5** 恢复出厂 | **稀疏**种子提取应用到 `storage.img` | Reset 与"用种子恢复"行为正确 | 1–2 天 |
 | **M6** 回归 | 真机双后端矩阵 + 契约指纹回归 + guest identity 守卫（可选） | §13.2 全绿 | 2–3 天 |
 | **M7** 发布 | CI、签名、Release、catalog、目录 Ed25519 签名、SSH 收紧、文档、license 合规 | 首个公开版本 | 2 天 |
 
-**合计 16–22 个工作日 ≈ 3.5–4.5 周**（不含 AVF 真机排期依赖）。
+**合计 17–22 个工作日 ≈ 3.5–4.5 周**（不含 AVF 真机排期依赖；M2 另有拆分意见见 R2: D-R2-14）。
 
 ---
 
@@ -1185,10 +1259,10 @@ qemu-system-aarch64 \
 ## 附录 B：参考
 
 - 上游 VM 功能：`ExTV/Podroid`（`CLAUDE.md`、`engine/`）
-  —— **行号引用（`QemuEngine.kt:575` 等）基于 2026-10-07 抓取的 `main` 分支，
-  M1 导入上游后须逐条核对并补记 commit hash**（R1: B-R1-20，R2 由 D 评审者执行）
+  —— **行号引用已核对：`ExTV/Podroid` `main` @ `ce0121896b2895637ab1f656cbb0d75fa2874489`
+  （2026-09-21），R2 由 D 评审者逐行复验通过（R1: B-R1-20 / R2: D-R2-30）**
 - 启动契约：`ltbkq/Podroid-Debian/docs/COMPAT.md`
 - Alpine→Debian 差异：`ltbkq/Podroid-Debian/docs/DELTAS.md`
 - 阶段计划与 APK 重建记录：`ltbkq/Podroid-Debian/docs/PLAN.md`
 - 镜像字节级规格：本仓库 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)
-- 评审规程与轮次记录：[REVIEW.md](REVIEW.md) · [reviews/R1.md](reviews/R1.md)
+- 评审规程与轮次记录：[REVIEW.md](REVIEW.md) · [reviews/R1.md](reviews/R1.md) · [reviews/R2.md](reviews/R2.md)

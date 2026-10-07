@@ -50,7 +50,12 @@ docs/
   DESIGN.md          Full design document (architecture, image lifecycle, download/import,
                      capability negotiation, milestones)
   IMAGE-FORMAT.md    Byte-level .img spec (footer / manifest / verification rules)
+  REVIEW.md          Multi-AI review protocol (roles, rounds, requirements baseline)
+  reviews/           Per-round issue logs (R1.md, R2.md …)
 ```
+
+> This English README is a **secondary translation**; update `README.md` first,
+> then sync this file or note `last-synced` here.
 
 This repository is currently at the **design stage**; application code is not imported yet.
 
@@ -68,9 +73,9 @@ This repository is currently at the **design stage**; application code is not im
 
 | Phase | Content | Status |
 |---|---|---|
-| M0 | Design review + P0 spike (trailing-data direct mount on real QEMU/AVF) | **In progress** |
+| M0 | Design review (R1–R3) + P0 spike (trailing-data direct mount on real QEMU/AVF + PC boot timing) | **In progress** |
 | M1 | Fork upstream → rename/package → strip rootfs asset | Not started |
-| M2 | `.img` codec + `mkimg.sh` + account spec | Not started |
-| M3–M7 | Image management / download / regression / release | Not started |
+| M2 | `.img` codec + `mkimg.sh` (`--kernel/--initrd`) + first `debian.img` + `pc-run.sh` + account spec | Not started |
+| M3–M7 | Image management + boot-image selector / download / factory reset / regression / release | Not started |
 
 See [docs/DESIGN.md §14](docs/DESIGN.md).

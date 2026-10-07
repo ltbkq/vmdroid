@@ -107,14 +107,21 @@ offset
 1. 先判断 `file_size ≥ 4096`；读最后 4096 字节 → 校验 `magic`/`magic_tail`。
    - 魔数不匹配 → 走拒绝分支（N4：裸 squashfs 提示封装；否则"非本格式"）。
    - 魔数匹配才检查 `file_size < 8192 → 拒绝`（避免误杀极小合法文件，R1: B-R1-11）。
-2. 校验 `footer_size == 4096`、`format_version ≤ 1`、`flags 保留位为 0`。
+2. 校验 `footer_size == 4096`、`format_version ≤ 1`、
+   `flags 保留位为 0`（**合法位 = bit0|bit1|bit2，掩码 `0x7`**；R2: A-R2-1/B-R2-1/C-R2-1）。
 3. 校验 `file_size == <实际文件大小>`（否则 = 截断/拼接，拒绝）。
-4. **边界/溢出校验**（R1: B-R1-10，用溢出安全比较）：
-   `rootfs_size ≤ seed_offset ≤ manifest_offset`、
-   `manifest_offset + manifest_size ≤ file_size - 4096`、
-   `seed_offset + seed_size ≤ manifest_offset` —— 任一不满足按损坏拒绝。
-5. 定位 `manifest_offset/manifest_size` → 读出 → sha256 比对。
-6. 逐 payload 校验 sha256（可延迟到"校验"动作，见 DESIGN §6.4）。
+4. **flags ↔ 段一致性**（R2: B-R2-6/C-R2-2）：
+   `bit0` 置位 ⇔ `seed_size > 0`；`bit1` 置位 ⇔ `kernel_size > 0`；`bit2` 置位 ⇔ `initrd_size > 0`；
+   未置位时对应 `*_offset`/`*_size` 必须为 0 —— 任一不符按损坏拒绝。
+5. **边界/溢出校验**（R1: B-R1-10，用溢出安全比较 `a > MAX - b`）：
+   - 段序（按 §2 布局）：`rootfs` → `seed` → `kernel` → `initrd` → `manifest` → `footer`；
+   - 每个**存在的**段 `[offset, offset+size)` 必须落在 `[0, file_size - 4096)` 内；
+   - 无 seed 时 `seed_offset == seed_size == 0`（**不参与不等式链**，
+     否则 `rootfs_size ≤ 0` 恒假 —— R2: B-R2-2）；
+   - `manifest_offset + manifest_size ≤ file_size - 4096`；
+   - 任一不满足按损坏拒绝。
+6. 定位 `manifest_offset/manifest_size` → 读出 → sha256 比对。
+7. 逐 payload 校验 sha256（可延迟到"校验"动作，见 DESIGN §6.4）。
 
 ---
 
@@ -214,13 +221,25 @@ if footer.magic != "VMDIMG01" or footer.magic_tail != "VMDIMG01":
     -> 否则 reject("非 VMDroid 系统镜像")        # N4：不接受任何非 .img 输入
 if footer.file_size != size: reject("truncated")
 if footer.format_version > 1: reject("format too new, update app")
-if footer.flags & ~0x1: reject("unknown flags")
-# 边界/溢出校验（R1: B-R1-10）：任一不满足 → 按损坏拒绝
-if not (rootfs_size <= seed_offset <= manifest_offset): reject("bad offsets")
+if footer.footer_size != 4096: reject("bad footer")
+# ★ 合法 flags = bit0(SEED)|bit1(KERNEL)|bit2(INITRD)，掩码 0x7（R2 Blocker 修复）
+if footer.flags & ~0x7: reject("unknown flags")
+# ★ flags ↔ 段一致性
+if (footer.flags & 0x1) != (footer.seed_size  > 0): reject("flags/seed mismatch")
+if (footer.flags & 0x2) != (footer.kernel_size > 0): reject("flags/kernel mismatch")
+if (footer.flags & 0x4) != (footer.initrd_size > 0): reject("flags/initrd mismatch")
+# ★ 边界/溢出校验：每段 [offset, offset+size) ⊆ [0, file_size-4096)
+for seg in [rootfs, seed(if bit0), kernel(if bit1), initrd(if bit2)]:
+    if seg.offset > MAX-seg.size or seg.offset+seg.size > file_size-4096: reject("segment out of range")
+# 段序必须递增（无 seed 时该项为 0，不参与链式比较）
+require rootfs.offset == 0
+require seq_of_existing([seed, kernel, initrd, manifest]) offsets are strictly increasing
 if manifest_offset + manifest_size > file_size - 4096: reject("manifest out of range")
 read manifest at [manifest_offset, +manifest_size); sha256 == manifest_sha256?
-parse JSON -> validate arch == "arm64", capabilities.ssh == true, accounts.ssh_port == 22,
-              app.min_version_code <= currentVersionCode
+parse JSON -> require format == "vmdroid-system-image" else reject("非 VMDroid 镜像")
+          validate image.id  matches ^[a-z0-9][a-z0-9._-]{0,63}$   # 防 -drive 选项注入
+          validate arch == "arm64", capabilities.ssh == true, accounts.ssh_port == 22,
+                    app.min_version_code <= currentVersionCode
 activePath = file            # direct 模式（零拷贝直挂为 vdb）
 ```
 
@@ -259,7 +278,7 @@ tools/mkimg.sh \
    → 填充 → `manifest` → 填充（4 KiB 对齐）→ `footer`。
 5. `fsync`；输出全文件 sha256 + 体积，供 catalog 使用。
 6. **自检**：① 同一解析器回读；② 若含 kernel/initrd → 自动跑 `pc-boot-smoke.sh`
-   （起 QEMU 60s，断言出现 `Ready!`，见 DESIGN §13.2 R-16 用例）。
+   （起 QEMU **90s**，断言出现 `Ready!` 且 `ssh -p 9922` 可登录，见 DESIGN §13.2 R-16 用例）。
 
 **注意**：现有 `Podroid-Debian/out/debian-rootfs.squashfs` **无需重建**，
 `mkimg` 只是在尾部追加（秒级完成）。
@@ -295,7 +314,7 @@ tools/mkimg.sh \
 | `manifest_offset+manifest_size` 越界 / 偏移乱序 | 拒绝（B-R1-10 边界校验） |
 | `flags.bit1` 置位但 `kernel_size == 0` | 拒绝（flags 与段不一致） |
 | kernel payload 单字节翻转 | `kernel_sha256` 不匹配 → 拒绝（R-16：坏内核不能上机） |
-| **PC 冒烟**：`qemu-system-aarch64` 用 `.img` 内 kernel/initrd 启动 | 60s 内出现 `Ready!`（R-16 主验收） |
+| **PC 冒烟**：`qemu-system-aarch64` 用 `.img` 内 kernel/initrd 启动 | **90s** 内出现 `Ready!` + `ssh -p 9922` 可登录（R-16 主验收） |
 | `accounts.ssh_port = 2222` | 拒绝（违反 §4.8 端口规范） |
 | 扩展名 `.img` 但内容是 zip | 拒绝（以 footer 魔数为准，不看扩展名） |
 | 尾随数据（P0 spike） | QEMU + AVF 真机均可挂载并进入 `Ready!` |

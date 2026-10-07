@@ -49,6 +49,8 @@
 docs/
   DESIGN.md          详细设计文档（架构、镜像生命周期、下载/导入、能力协商、里程碑）
   IMAGE-FORMAT.md    .img 字节级格式规格（footer / manifest / 校验规则）
+  REVIEW.md          多 AI 评审规程（角色、轮次、需求基线）
+  reviews/           各轮问题单（R1.md、R2.md …）
 ```
 
 本仓库当前处于**设计阶段**，尚未导入应用代码。
@@ -65,9 +67,9 @@ docs/
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| M0 | 设计评审 + P0 spike（尾随数据直挂 QEMU/AVF 真机验证） | **进行中** |
+| M0 | 设计评审（R1–R3）+ P0 spike（尾随数据真机直挂 + PC 启动计时） | **进行中** |
 | M1 | fork 上游 → 改名/包名 → 移除 rootfs 资产 | 未开始 |
-| M2 | `.img` 编解码 + `mkimg.sh` + 账户规范落地 | 未开始 |
-| M3–M7 | 镜像管理 / 下载 / 回归 / 发布 | 未开始 |
+| M2 | `.img` 编解码 + `mkimg.sh`（`--kernel/--initrd`）+ 首个 `debian.img` + `pc-run.sh` + 账户规范 | 未开始 |
+| M3–M7 | 镜像管理 + 启动镜像选择控件 / 下载 / 恢复出厂 / 回归 / 发布 | 未开始 |
 
 详见 [docs/DESIGN.md §14](docs/DESIGN.md)。
