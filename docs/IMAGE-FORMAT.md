@@ -70,7 +70,7 @@ offset
 > **为什么直挂可行**：squashfs superblock 位于 0x0，块表用绝对偏移，内核唯一尺寸校验是
 > `bytes_used ≤ 设备大小`（`fs/squashfs/super.c`），因此**尾随数据安全、截断危险**。
 > P0 必须在真机 QEMU + AVF 各验证一次（DESIGN §13.3）。
-> 若任一后端不接受尾随数据 → 走 `extract` 模式（DESIGN §4.3），格式本身不变。
+> 若任一后端不接受尾随数据 → 走 `fallback-split` 分支（DESIGN §4.3），格式本身不变。
 
 ---
 
@@ -101,6 +101,11 @@ offset
 > **v1 无 seed 字段**（决策 2026-10-08）：原 `seed_offset/seed_size/seed_sha256`
 > （72–119）与 `HAS_SEED`（bit0）已移除，后续字段**前移 48 字节**。
 > format_version 1 尚未发布任何镜像，重编号无兼容负担。
+
+
+> **字段顺序 ≠ 段顺序**（R3: A-R3-31）：下表把 `manifest_*` 排在 `kernel_*` 之前，
+> 只是 seed 移除后重编号的结果；**文件内段序以 §2 与解析规则 5 为准**
+> （rootfs → kernel → initrd → manifest → footer）。
 
 **footer 解析规则**
 
@@ -147,11 +152,19 @@ offset
 
   "contract": {
     "version": 1,                      // 启动契约版本
+    // ★ 这 5 条是**契约标记子集**（guest 必须产出，boot-test/build-all 断言用）；
+    //   完整检测列表 = 上游 BootStageDetector.MARKERS 共 8 项（DESIGN §16.4，
+    //   含 "Booting kernel..."、"Mounting storage..."、"Configuring containers..."）。
+    //   末项标签 "Ready" 与控制台串 "Ready!" 是子串匹配关系（R3: A-R3-23）
     "markers": ["Loading kernel modules...", "Network found",
                 "Starting SSH...", "Almost ready...", "Ready!"],
     "ttys": { "hvc0": "login", "hvc1": "resize",
               "hvc2": "host-bridge", "ttyAMA0": "console" },
-    "kernel": { "builtin_only": true, "min": "6.0", "max": "7.99" }
+    "kernel": { "builtin_only": true, "min": "6.0", "max": "7.99",
+                "image_sha256": "…" }   // = footer.kernel_sha256（R3: A-R3-4）：
+                                        // APK 侧 assets/firmware.properties 记同一份内核
+                                        // 的 sha256，激活前比对；不一致 → §7.4 拒绝激活
+                                        // 缺失时降级：跳过内核比对，仅记 warning
   },
 
   "capabilities": {                    // ★ 应用 UI 的唯一真值来源（DESIGN §4.6）
@@ -178,7 +191,9 @@ offset
   "boot": {                        // ★ R-16：PC 端启动所需（与 footer 对应）
     "machine": "virt",             // qemu-system-aarch64 -M
     "cpu": "max",                  // TCG 可用；arm64 主机可换 host
-    "append": "console=ttyAMA0 mitigations=off",   // 基础 cmdline（应用可追加 podroid.*）
+    "append": "console=ttyAMA0 mitigations=off",   // ★ 权威基础串：宿主只可**追加**
+                                        //   `podroid.*`/`androidip=`，不得删改（R3: A-R3-29）
+                                        //   DESIGN §11.4 示例 = 本串 + 追加项
     "kernel_sha256": "…",          // = footer.kernel_sha256（JSON 侧便于工具读取）
     "initrd_sha256": "…",
     "drives": { "vda": "storage.img(rw,ext4)", "vdb": "<self>(ro,squashfs)" }
@@ -198,7 +213,7 @@ offset
   - 无 `accounts` → 仅 `root`、`ssh_port = 22`
   - 无 `contract` → 视为 `contract.version = 1`
 - `capabilities.ssh` 若为 `false` → 镜像不合格，`mkimg` 与应用均拒绝（SSH 是硬性要求）。
-- `accounts.ssh_port` **缺省 22；≠ 22 一律拒绝**（§4.8 端口规范）。
+- `accounts.ssh_port` **缺省 22；≠ 22 一律拒绝**（DESIGN §4.8 端口规范）。
 - **重置判定（DESIGN §5.2，三步）**：
   1. `rootfs_sha256` 相同 → 同一系统，**永不重置**（内容优先）；
   2. `identity` 不同 → `RESET_REQUIRED`；
@@ -229,8 +244,11 @@ if (footer.flags & 0x2) != (footer.initrd_size > 0): reject("flags/initrd mismat
 for seg in [rootfs, kernel(if bit0), initrd(if bit1)]:
     if seg.offset > MAX-seg.size or seg.offset+seg.size > file_size-4096: reject("segment out of range")
 # 段序必须递增（不存在的段 offset=0，不参与链式比较）
-require rootfs.offset == 0
-require seq_of_existing([kernel, initrd, manifest]) offsets are strictly increasing
+require rootfs.offset == 0 and prev_end = rootfs.size          # 段不重叠、按序紧邻
+for seg in [kernel(if bit0), initrd(if bit1), manifest]:
+    if seg.offset > MAX-prev_end or seg.offset < prev_end: reject("segment overlap/order")
+    prev_end = seg.offset + seg.size
+if prev_end > file_size - 4096: reject("tail out of range")
 if manifest_offset + manifest_size > file_size - 4096: reject("manifest out of range")
 read manifest at [manifest_offset, +manifest_size); sha256 == manifest_sha256?
 parse JSON -> require format == "vmdroid-system-image" else reject("非 VMDroid 镜像")
@@ -250,7 +268,7 @@ activePath = file            # direct 模式（零拷贝直挂为 vdb）
 | 下载/导入 | 全文件 sha256（= catalog `sha256`）+ footer/manifest 校验 → 写 `.meta.json` |
 | 每次启动前 | 比对 `.meta.json` 的 `size` + `mtime`（**不**重算 300MB sha256） |
 | 手动"校验" | 全量 payload sha256 重算 |
-| 激活切换 | manifest `identity` 比对 → 决定是否 `RESET_REQUIRED` |
+| 激活切换 | manifest `identity` 比对 → 决定是否 `RESET_REQUIRED`（`decision` 枚举权威定义见 DESIGN §5.2） |
 
 ---
 
@@ -306,7 +324,7 @@ tools/mkimg.sh \
 | 文件截断 1 字节 | `footer.file_size != size` → 拒绝 |
 | manifest 单字节翻转 | `manifest_sha256` 不匹配 → 拒绝 |
 | `arch != arm64` | 拒绝激活 |
-| `capabilities.ssh == false` | 拒绝（违反 §4.8） |
+| `capabilities.ssh == false` | 拒绝（违反 DESIGN §4.8） |
 | 裸 squashfs | **拒绝**并提示封装（N4） |
 | `format_version = 2` | 拒绝并提示升级应用 |
 | `manifest_offset+manifest_size` 越界 / 偏移乱序 | 拒绝（B-R1-10 边界校验） |
@@ -314,7 +332,7 @@ tools/mkimg.sh \
 | footer 偏移重编号回归：`manifest@72`、`kernel@124`、`initrd@172` | 逐字段断言（防 seed 移除后再错位，R2: RB-1 教训） |
 | kernel payload 单字节翻转 | `kernel_sha256` 不匹配 → 拒绝（R-16：坏内核不能上机） |
 | **PC 冒烟**：`qemu-system-aarch64` 用 `.img` 内 kernel/initrd 启动 | **90s** 内出现 `Ready!` + `ssh -p 9922` 可登录（R-16 主验收） |
-| `accounts.ssh_port = 2222` | 拒绝（违反 §4.8 端口规范） |
+| `accounts.ssh_port = 2222` | 拒绝（违反 DESIGN §4.8 端口规范） |
 | 扩展名 `.img` 但内容是 zip | 拒绝（以 footer 魔数为准，不看扩展名） |
 | 尾随数据（P0 spike） | QEMU + AVF 真机均可挂载并进入 `Ready!` |
 
@@ -331,4 +349,4 @@ tools/mkimg.sh \
 | accounts（root + ltbkq，pw 123，SSH 22） | §4.8 |
 | 校验时机与 `.meta.json` | §6.4 |
 | **无 seed / 恢复出厂 = 清零重建** | §4.3（决策 2026-10-08） |
-| 目录（catalog）字段 | §6.1（共用字段一一对应：`image_id↔image.id`、`identity`、`variant`、`version`、`system_version`、`arch`；`url/size/sha256/channel` 仅 catalog，`contract/capabilities/accounts/boot` 仅 manifest） |
+| 目录（catalog）字段 | §6.1（共用字段一一对应：`image_id↔image.id`、`display_name`、`identity`、`variant`、`version`、`system_version`、`arch`、`app_min_version_code↔app.min_version_code`；`url/size/sha256/channel/notes/schema` 仅 catalog，`contract/capabilities/accounts/boot/checksums` 仅 manifest） |

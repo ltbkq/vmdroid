@@ -11,7 +11,7 @@
 
 | 角色 | 审什么 | 不审什么 |
 |---|---|---|
-| **A · 一致性** | 三份文档互相矛盾、章节引用失效（§x.y 指错）、表格数值不一致、术语漂移 | 技术方案对不对 |
+| **A · 一致性** | 四份文档（DESIGN / IMAGE-FORMAT / README / README.en）互相矛盾、章节引用失效（§x.y 指错）、表格数值不一致、术语漂移 | 技术方案对不对 |
 | **B · 技术正确性** | 底层事实是否成立（squashfs 尾随数据、QEMU/AVF 能力、Android 存储/SAF、dropbear/systemd 配置、端口链路） | 需求覆盖 |
 | **C · 需求覆盖** | 用户原始需求是否每条都有落点 + 有验收标准（见 §5 需求基线） | 文风、排版 |
 | **D · 可实施性** | 拿到文档能否直接开工：缺哪些字段、哪些步骤、哪些工具、哪些测试；工作量/里程碑是否合理 | 重新做产品决策 |
@@ -61,7 +61,7 @@
 按严重度 Blocker/Major/Minor/Info 分组。不要复述文档内容，只输出问题。
 要求：(1) 每条必须给出精确位置（章节号/行号）与可执行的替换文本；
 (2) 对技术断言要做事实核查，存疑就标注"待验证"并说明如何验证；
-(3) 若文档之间（DESIGN / IMAGE-FORMAT / README）互相矛盾，必须点名两处；
+(3) 若文档之间（DESIGN / IMAGE-FORMAT / README / README.en）互相矛盾，必须点名两处；
 (4) 不要提出与已有决策冲突的新产品方向，只指出决策未落地之处。
 
 <此处粘贴 docs/DESIGN.md>
@@ -94,7 +94,7 @@
 | R-14 | 应用内下载 + 手动导入 | DESIGN §6 | 两条路径都可安装镜像 |
 | R-15 | （评审补充）首次运行无镜像须引导且不启动死机 | DESIGN §7.4/§8.4 | 引导页出现且 VM 不进挂载失败态 |
 | R-16 | **`.img` 在 Linux PC 端可用 QEMU 正常启动** | DESIGN §11.4 + IMAGE-FORMAT §2/§3 | x86_64 Linux + `qemu-system-aarch64` 一条命令启动 → 90s 内 `Ready!` 且 ssh 可登录 |
-| R-17 | **强化虚拟机日志输出，便于排查纠偏** | DESIGN §16 | ①历史启动不被覆盖（`boots/` ≤10 条）②失败启动有 `meta.json`（`fail_stage`+`console_tail`）③镜像生命周期入 `image.log`（含 `activate.decision`）④导出 zip 无明文密码 ⑤journal 有 64MB 上限 |
+| R-17 | **强化虚拟机日志输出，便于排查纠偏** | DESIGN §16 | ①历史启动不被覆盖（`boots/` ≤10 次启动）②失败启动有 `meta.json`（`fail_stage`+`console_tail_b64`）③镜像生命周期入 `image.log`（含 `activate.decision`）④导出 zip 无明文密码 ⑤journal 有 64MB 上限 |
 
 **本轮新需求（N1–N4，用户 2026-10-07 第 4 批）**
 

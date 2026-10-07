@@ -18,7 +18,7 @@
    不重装应用、不改应用代码。后续新系统**只上架镜像，应用零更新**。
 
 ```
-┌────────── VMDroid APK (~70 MB) ──────────┐      ┌─── 系统镜像 .img (~150 MB) ──┐
+┌────────── VMDroid APK (~70 MB) ──────────┐      ┌─── 系统镜像 .img (≤150 MB) ──┐
 │ VM 引擎(QEMU/AVF) │ 内核+initrd │ UI      │      │ rootfs.squashfs  → vdb (只读) │
 │ 终端/VNC/USB/桥接 │ ★镜像管理器            │ ───▶ │ + kernel/initrd → PC 可启动      │
 └───────────────────────────────────────────┘      │ + manifest + 校验和 (尾部)     │
@@ -36,8 +36,11 @@
 | 账户 | `root` / 密码 `123`，**`ltbkq` / 密码 `123`（免密 sudo）** —— 两者均可 SSH 登录 |
 | 验收 | `tools/boot-test.sh` 轮询 console 到 `Ready!`；双账户 SSH 登录成功 |
 | 获取系统 | 应用内目录**下载**（断点续传 + sha256 校验）· 或**从文件导入**——**仅 `.img` 格式**（其他格式用 `mkimg.sh` 封装） |
+| 首次运行 | 无镜像 → **引导页**（下载/导入），启动按钮隐藏，不会启动挂载失败的死机（[DESIGN §8.4](docs/DESIGN.md)） |
 | **PC 启动** | `.img` 自带 kernel/initrd，Linux PC 上 `tools/pc-run.sh debian.img` 一条命令进入 `Ready!` |
+| **PC 启动** | `.img` 自带 kernel/initrd，Linux PC 上 `tools/pc-run.sh debian.img` 一条命令进入 `Ready!`（依赖 `apt install qemu-system-arm python3 e2fsprogs`） |
 | 启动镜像 | Home 页**启动镜像选择控件**，一键切换已安装的 `.img`（详见 [DESIGN §8.2](docs/DESIGN.md)） |
+| 恢复出厂 | 清零数据盘 `storage.img`，guest 下次开机自动重建（无需种子，[DESIGN §4.3](docs/DESIGN.md)） |
 | 日志诊断 | **历史启动不丢**（`boots/` 归档 + 阶段耗时 + 失败原因），一键导出诊断包（详见 [DESIGN §16](docs/DESIGN.md)） |
 | 后续 | `debian-desktop.img` / `debian-containers.img` / `ubuntu.img` … 只加镜像，不改应用 |
 
@@ -68,7 +71,7 @@ docs/
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| M0 | 设计评审（R1–R3）+ P0 spike（尾随数据真机直挂 + PC 启动计时） | **进行中** |
+| M0 | 设计评审（R1–R3）+ P0 spike（尾随数据真机直挂 + PC 启动计时） | **评审完成 R1–R3 ✅，待 P0 spike** |
 | M1 | fork 上游 → 改名/包名 → 移除 rootfs 资产 | 未开始 |
 | M2 | `.img` 编解码 + `mkimg.sh`（`--kernel/--initrd`）+ 首个 `debian.img` + `pc-run.sh` + 账户规范 | 未开始 |
 | M3–M7 | 镜像管理 + 启动镜像选择控件 / 下载 / 恢复出厂 / 回归 / 发布 | 未开始 |
