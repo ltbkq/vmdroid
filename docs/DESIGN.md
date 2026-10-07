@@ -1,0 +1,933 @@
+# VMDroid 设计文档
+
+**软件名：VMDroid** —— 一个独立的 Android 虚拟机应用 + 可插拔的系统镜像（`.img`）。
+
+| | |
+|---|---|
+| 状态 | 草案 v0.1（2026-10-07） |
+| 关联仓库 | 本仓库 `ltbkq/vmdroid`（应用） · [`ltbkq/Podroid-Debian`](https://github.com/ltbkq/Podroid-Debian)（系统镜像构建） · [`ExTV/Podroid`](https://github.com/ExTV/Podroid)（VM 功能上游，GPLv2） |
+| 许可证 | GPL-2.0-or-later（继承上游） |
+| 目标平台 | Android 8+（API 26+），arm64（aarch64） |
+| 镜像格式规格 | 见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md) |
+
+---
+
+## 1. 背景与目标
+
+### 1.1 现状问题
+
+Podroid 是一个"单体 APK"：虚拟机（QEMU/AVF 引擎、内核、initrd、桥接、终端、VNC）和
+Guest 操作系统（`alpine-rootfs.squashfs`）全部打包进同一个 APK。
+
+实测数据（来自 `Podroid-Debian/docs/PLAN.md`）：
+
+| 项 | 大小 |
+|---|---|
+| 上游 APK | 367 MB |
+| 其中 `assets/alpine-rootfs.squashfs` | 297,156,608 B（≈ 283 MiB） |
+| Debian 构建产物 `out/debian-rootfs.squashfs` | 345,251,840 B（≈ 329 MiB） |
+| 去掉系统镜像后的 APK（估算） | **≈ 70 MB** |
+
+由此产生的具体痛点：
+
+1. **升级系统 = 重打 367 MB APK**。改一行 `/etc` 配置也要用户重新下载整个应用。
+2. **磁盘双份占用**。APK 内资产一份 + `PodroidApplication.extractAssets()`
+   复制到 `filesDir` 一份（`PodroidApplication.kt:103-108`），峰值 ≈ APK 体积 + 镜像体积。
+3. **升级即全量重拷**。`.assets_stamp` 用 `lastUpdateTime` 判断
+   （`PodroidApplication.kt:83-91`），任何 APK 升级都强制重新复制 ~300 MB 镜像。
+4. **系统与应用强耦合**。换发行版（Alpine → Debian）必须改资产文件名或重编 APK，
+   上游 Podroid-Debian 只能沿用历史资产名 `alpine-rootfs.squashfs` 来避免改 Kotlin。
+5. **无法离线分发系统**。用户不能单独拿到一个系统文件去备份、拷贝、复用。
+
+### 1.2 目标
+
+> **核心目的只有两条**：
+> ① **软件与系统分开** —— 虚拟机是一个独立软件，系统是一个独立文件；
+> ② **系统可以更换** —— 换系统 = 换一个 `.img`，不重装应用、不改应用代码。
+>
+> 首发只提供 **一个** 系统文件 `debian.img`（最小化安装），
+> 后续系统（桌面版、容器版、其他发行版）**只上架新镜像，应用不更新**。
+
+| # | 目标 | 验收标准 |
+|---|---|---|
+| G1 | 虚拟机独立成软件 | VMDroid APK ≈ 70 MB，**不含任何发行版 rootfs** |
+| G2 | 系统是单个 `.img` 文件 | 一个自描述、可校验、可独立分发/备份的文件，见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md) |
+| G3 | VM 功能参照 Podroid | VM 栈（引擎、socket 布局、启动契约、桥接、终端、VNC、USB）与上游 **1:1 对齐**，见 §3 |
+| G4 | **保持 vda + vdb 启动契约** | `init-podroid`、内核、initrd、guest 脚本 **零改动** |
+| G5 | 应用内下载 + 手动导入 | 目录订阅 + 断点续传下载；SAF 文件选择器导入；两者均流式校验 |
+| G6 | 不破坏持久化语义 | `storage.img`（vda）跨镜像升级保留；换发行版时按 identity 决定是否必须重置 |
+| G7 | **首发镜像 `debian.img`（最小化）** | 只含启动契约所需组件，不预装桌面/容器；体积 ≤ 150 MB（目标）；`boot-test` 报 `Ready!` |
+| G8 | 后续系统零应用更新 | 新镜像仅凭 `catalog.json` 上架即可下载、安装、切换（能力差异由 manifest 协商，§4.6） |
+
+### 1.3 非目标
+
+- 不做桌面/PC 端虚拟机软件（但 `.img` 设计上可在 PC 上用 QEMU 直接挂载，见 §11.4）。
+- 不做多虚拟机并行（单实例，与上游一致）。
+- 不改 Guest 发行版内容本身（仍由 `Podroid-Debian` 构建）。
+- 不改启动契约、控制台标记、tty 角色、端口转发语义（见 `Podroid-Debian/docs/COMPAT.md`）。
+- 不改上游内核/initrd（v1 阶段随 APK 分发；格式已预留外置槽位，见 §4.4）。
+
+---
+
+## 2. 总体架构
+
+### 2.1 分离前后
+
+```
+【现状 · Podroid 单体】
+┌─────────────────────────── APK (367 MB) ───────────────────────────┐
+│ VM 引擎(QEMU/AVF) │ 内核+initrd │ UI │ 桥接 │ alpine-rootfs.squashfs │
+└─────────────────────────────────────────────────────────────────────┘
+        │  extractAssets() 全量复制到 filesDir
+        ▼
+  filesDir/{vmlinuz-virt, initrd.img, qemu/, alpine-rootfs.squashfs, storage.img}
+
+【目标 · VMDroid 分离】
+┌────────── VMDroid APK (~70 MB) ──────────┐      ┌─── 系统镜像 .img (~330 MB) ───┐
+│ VM 引擎(QEMU/AVF) │ 内核+initrd │ UI      │      │ rootfs.squashfs (vdb, 只读)    │
+│ 桥接/终端/VNC/USB │ 镜像管理器(新增)       │ ───▶ │ + 可选 persist 种子 (vda 初始) │
+└───────────────────────────────────────────┘      │ + 自描述 manifest + 校验和      │
+        │ 只复制内核/initrd(~20 MB)                 └────────────────────────────────┘
+        ▼
+  filesDir/{vmlinuz-virt, initrd.img, qemu/, images/<id>.img, storage.img}
+```
+
+### 2.2 组件图
+
+```
+┌──────────────────────────── VMDroid (本仓库) ────────────────────────────┐
+│                                                                         │
+│  ui/            Home · Terminal · X11 · Settings · ImageManager(新)      │
+│  service/       VmdroidService（前台服务，VM 生命周期/唤醒锁/通知）        │
+│  engine/        VmEngine ──┬── QemuEngine   (TCG, QMP, unix sockets)     │  ← 参照 Podroid
+│                            └── AvfEngine    (pKVM, vsock, reflection)    │
+│                 EngineHolder · BootStageDetector · QmpClient             │
+│                 hostbridge/ · usb/ · (avf/ninep 9p 下载共享)             │
+│  systemimage/   ★ 新增包                                                │
+│     ├ VmdImageCodec      .img 读写/解析/校验 (IMAGE-FORMAT.md)           │
+│     ├ SystemImageRepo    已安装镜像 + 当前激活镜像（DataStore）           │
+│     ├ ImageInstaller     SAF 导入 → 流式拷贝+sha256 → 激活               │
+│     ├ ImageDownloader    HTTP Range 断点续传 → 校验 → 激活               │
+│     ├ ImageCatalogRepo   目录(JSON)拉取/缓存/签名校验(可选)              │
+│     └ BootGuard          无镜像/损坏/需重置 时阻止启动并引导              │
+│  firmware/       vmlinuz-virt · initrd.img · qemu/   (APK 资产, 保留)     │
+└─────────────────────────────────────────────────────────────────────────┘
+                      │ vdb = images/<id>.img   (只读, 零拷贝直挂)
+                      │ vda = storage.img       (可写, 应用创建/种子恢复)
+                      ▼
+┌────────────── Guest（仍由 Podroid-Debian 构建，契约不变）────────────────┐
+│ init-podroid: vda→/mnt/persist(ext4)  vdb→/mnt/lower(squashfs)          │
+│              overlay → switch_root → /sbin/init(systemd)                │
+│ 控制台标记: Loading kernel modules... / Network found /                 │
+│            Starting SSH... / Almost ready... / **Ready!**               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.3 磁盘与文件布局
+
+| 设备 | 文件 | 内容 | 所有者 | 生命周期 |
+|---|---|---|---|---|
+| `vda` | `filesDir/storage.img` | ext4，可写 overlay upper + `docker`/`containers`/`lxc` 绑定 | App 创建（sparse）或镜像种子恢复 | **跨镜像升级保留**；Reset VM / identity 变更时重建 |
+| `vdb` | `filesDir/images/<imageId>.img` | `.img` 文件（squashfs 起始，可尾随种子） | 镜像管理器 | 随镜像安装/删除/激活变化 |
+| — | `filesDir/vmlinuz-virt`, `initrd.img`, `qemu/` | VM 固件 | APK 资产提取（3 项，不再有 rootfs） | 随 APK 升级 |
+
+```
+filesDir/
+├── vmlinuz-virt · initrd.img · qemu/        # VM 固件（APK 资产）
+├── .assets_stamp                             # 现有 stamp 机制，只剩 3 项资产
+├── images/
+│   ├── debian-trixie-arm64.img              # 已安装镜像（可多个）
+│   ├── debian-trixie-arm64.img.part         # 下载/导入中的临时文件
+│   ├── debian-trixie-arm64.img.meta.json    # 校验记录 {sha256,size,mtime,verified_at}
+│   └── active.json                          # 当前激活镜像 id + identity
+├── storage.img                               # vda 用户数据盘
+└── terminal.sock · ctrl.sock · serial.sock · qmp.sock · host.sock · console.log
+```
+
+---
+
+## 3. 与 Podroid 的关系（VM 功能参照表）
+
+VMDroid 以 **fork ExTV/Podroid** 的方式实现（GPLv2，保留版权头与 git 历史），
+VM 功能 **全部沿用**，只改"系统从哪来"这一件事。
+
+| Podroid 子系统 | 上游位置 | VMDroid 处理 | 说明 |
+|---|---|---|---|
+| `VmEngine` 接口 | `engine/VmEngine.kt` | **原样保留** | `state/bootStage/consoleText/start/stop/createTerminalSession/addPortForward/...` |
+| `EngineHolder` 路由 | `engine/EngineHolder.kt` | **原样保留** | 后端热切换、端口转发 diff、`rulesAppliedAtLaunch` 语义 |
+| `QemuEngine` | `engine/QemuEngine.kt` | **仅改 rootfs 路径来源** | `buildCommand()` 的 `-M virt,gic-version=3`、`-cpu max,pauth-impdef=on`、`-accel tcg,thread=multi`、iothread 分离、`discard=unmap` 全部保留；§7.1 |
+| `AvfEngine` | `engine/avf/AvfEngine.kt` | **仅改 rootfs 路径来源** | `ensureStorageImage()`、vsock 控制/转发/9p、`addDisk(writable=false)` 保留；§7.2 |
+| Socket 布局 | `filesDir/*.sock` | **原样保留** | `terminal.sock`(hvc0) · `ctrl.sock`(hvc1) · `serial.sock`(ttyAMA0) · `qmp.sock` · `host.sock`(hvc2) |
+| `BootStageDetector` / `QemuBootMonitor` | `engine/` | **原样保留** | 滚动缓冲区（最后 ~1KB）匹配 `Ready!` → `VmState.Running` |
+| 启动阶段脚本 | guest 侧 | **原样保留** | 由 Podroid-Debian 提供，`.img` 的 rootfs 必须包含 |
+| host bridge | `engine/hostbridge/` | **原样保留** | QEMU `/dev/hvc2` / AVF vsock 9101，一行请求一行响应 |
+| 端口转发 | `PortForwardRepository` + QMP/vsock | **原样保留** | 隐式转发 9922/5900/4713；§10.3 提议收紧 |
+| 终端（Termux fork） | `terminal-view/`, `terminal-emulator/` | **原样保留** | `createTerminalSession()` |
+| X11/VNC 查看器 + PulseAudio | `x11/` | **原样保留** | RFB + PCM over TCP |
+| USB 直通 | `engine/usb/` | **原样保留** | `add-fd` + `device_add usb-host`（QEMU 专属） |
+| 9p Downloads 共享 | `engine/avf/ninep/` | **原样保留** | AVF 专属（QEMU 用 `-fsdev local`） |
+| 前台服务 | `service/PodroidService.kt` | **重命名** `VmdroidService` | 生命周期/唤醒锁/通知/自动启动意图 |
+| 资产提取 | `PodroidApplication.kt:103-108` | **裁剪为 3 项** | 删除 `alpine-rootfs.squashfs` 任务 |
+| 系统镜像 | APK 内资产 | **移除 → 新增 `systemimage/`** | 本设计文档的核心 |
+| 包名 | `com.excp.podroid` | `io.github.ltbkq.vmdroid`（见 §12.1） | 新包名 = 无法原地升级上游安装 |
+| 品牌/文案 | Podroid | VMDroid | 保留 guest 内 `podroid-*` 标识（契约的一部分） |
+
+> **契约红线**：`podroid-*` 这些 **guest 内部** 的服务名、脚本路径、控制台标记字符串、
+> `/etc/podroid/` 目录名，都是启动契约的一部分，**在 `.img` 内必须原样存在**，
+> 不随应用改名。改名只发生在 Android 侧类名/包名。
+
+---
+
+## 4. 系统镜像 `.img` 规格（摘要）
+
+完整字节级规格见 **[IMAGE-FORMAT.md](IMAGE-FORMAT.md)**，此处仅列设计动机。
+
+### 4.1 设计约束
+
+1. **必须能直接作为 `vdb` 只读挂载**（QEMU `readonly=on` 与 AVF `addDisk(writable=false)` 一致），
+   否则要么复制 300 MB（安装慢、双份占用），要么改 `init-podroid`（违反 G4）。
+2. **必须携带自描述元数据**（identity、版本、架构、契约版本、校验和），否则无法做
+   升级/回滚/重置决策，也无法做完整性校验。
+3. **必须支持可选的 vda 初始种子**（工厂预置 ext4），用于"恢复出厂镜像"。
+4. **单文件、可断点、可流式校验**。
+
+### 4.2 选定方案：squashfs 前置 + 尾随段 + footer
+
+```
+┌────────────────────── .img 文件（单文件） ──────────────────────┐
+│ 0x0                rootfs.squashfs (hsqs superblock 在 0x0)     │  ← 直接当 vdb 挂载
+│ ...squashfs 结束                                                 │
+│ [1 MiB 对齐]     persist 种子 ext4（可选，flags.has_seed）        │  ← 仅 Reset/首装时提取成 storage.img
+│ [1 MiB 对齐]     manifest JSON (UTF-8)                          │
+│ 末尾 4096 B      footer（magic + manifest 偏移/长度/sha256）      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**为什么可行**：squashfs 的 superblock 在文件 0x0，块表用绝对偏移，
+内核只读到 `superblock.bytes_used` 为止，**尾随数据天然被忽略** —— 因此
+`.img` 本身就是一个合法的 squashfs，可以零拷贝直挂为 `vdb`。
+
+| 备选方案 | 结论 | 原因 |
+|---|---|---|
+| A. squashfs + 尾随段（选定） | ✅ | 零拷贝直挂；同时能携带种子与元数据；无需改 initramfs |
+| B. 容器格式，安装时拆成两个文件 | ⚠️ 备用 | 需在安装时多写 ~300 MB、峰值双份占用；**作为 A 的降级路径保留**（见 §4.3） |
+| C. GPT 分区裸盘（p1=ext4, p2=squashfs） | ❌ | `init-podroid` 直接 `mount /dev/vdb`，不认分区；改它违反 G4 |
+| D. QEMU `-blockdev` slice（offset/size） | ⚠️ 后续优化 | QEMU 可行但 AVF/crosvm 无对应能力，两后端会不对称 |
+| E. `.img` 就是裸 squashfs | ⚠️ 部分采用 | **保持兼容**：无 footer 的裸 squashfs 也能导入（§5.4），只是没有元数据 |
+
+### 4.3 两种消费模式
+
+| 模式 | 触发条件 | 行为 |
+|---|---|---|
+| **direct**（默认，首选） | 文件是合法 `.img` 或裸 squashfs | 验证通过后 **原地挂载**，零额外写入 |
+| **extract**（降级/种子） | 尾部 spike 验证失败（P0 风险），或用户执行"恢复出厂" | 按 manifest 把 payload 拆出到 `images/rootfs.squashfs`（或 `storage.img` 种子） |
+
+应用在 P0 阶段做一次真机 spike 判定 `direct` 是否可用（QEMU + AVF 各验一次）；
+不可用则自动落到 `extract`，**对用户无感**（只是多一次 300 MB 写入）。
+
+### 4.4 版本与兼容协商
+
+manifest 携带，激活前由 `BootGuard` 拦截：
+
+| 字段 | 作用 |
+|---|---|
+| `format_version` | 解析器兼容（当前 1） |
+| `arch` | 必须 `arm64`，否则拒绝 |
+| `app.min_version_code` | 镜像要求的最低应用版本 |
+| `contract.version` | 启动契约版本（控制台标记、tty 角色、设备语义） |
+| `contract.kernel.*` | 内核要求；v1 用 APK 内置内核，若镜像要求不同内核 → 拒绝并提示（格式预留 `kernel` payload 槽位，未来可外置内核） |
+
+### 4.5 首发镜像：`debian.img`（最小化）
+
+首发**只做一个**系统文件，命名固定为 `debian.img`（目录中的 `image_id`
+建议 `debian-minimal-arm64`，`identity = debian:trixie`）。
+
+**定位**：能开机、能进终端、能联网的**最小可用 Debian**，其余功能按需后加。
+
+| 维度 | 首发 `debian.img` | 对比当前 `Podroid-Debian` 全量构建 |
+|---|---|---|
+| 包数量 | 目标 ~90–120（minbase + 契约组件） | 283 |
+| 体积 | 目标 **≤ 150 MB**（zstd-19） | 345 MB |
+| init | systemd（`systemd-sysv`） | 同 |
+| SSH | dropbear（契约要求，`Ready!` 前置） | 同 |
+| 登录账户 | **`root` + `ltbkq` 两个账户，默认密码均为 `123`，均可 SSH 登录** | 仅 `root` |
+| sudo | `ltbkq` 在 sudo 组（`NOPASSWD`） | 无普通用户 |
+| 容器栈 | ❌ 不装 docker/podman/lxc | ✅ 装 |
+| 桌面 / Xvnc / pulseaudio | ❌ 不装 | ✅ 装 |
+| X11 字体 | ❌ 不装 | ✅ 装 |
+
+**最小镜像必须保留（启动契约的一部分，缺一不可开机/不可用）**：
+
+```
+systemd-sysv, dbus-sysv (?) → /sbin/init 链路
+dropbear                      → guest :22（SSH 系统默认端口；宿主 9922 → guest 22）
+iproute2, isc-dhcp-client     → podroid-network（AVF 用 dhclient）
+util-linux, mount, overlay    → overlayfs 挂载
+/usr/local/lib/podroid/*      → bootstrap/network/ready/resize/migrate
+/usr/local/bin/podroid-*      → getty/login/resize + overlay-normalize
+/usr/local/lib/podroid/podroid-hostd → host bridge（Home 容器计数、通知、端口转发）
+sudo, ca-certificates, locales(min)  → 基本可用性
+```
+
+**账户与登录（镜像构建期固化，见 §4.8）**：
+
+```
+root   密码 123   # 与上游 Podroid-Debian 一致，保留用于 adb/调试/回归脚本
+ltbkq  密码 123   # 日常账户，wheel/sudo 组，NOPASSWD
+dropbear 允许 root + ltbkq 两账户密码登录（两者都能 ssh 进入）
+```
+
+**首发明确不装**：docker.io / podman / lxc / crun / netavark / aardvark-dns /
+tigervnc(Xvnc) / pulseaudio / X11 / xfce / 字体。
+
+**这意味着应用侧必须能"优雅降级"**（否则首发镜像会被 UI 判成坏镜像）：
+
+| 能力缺失 | 应用表现 |
+|---|---|
+| 无 Xvnc（5900） | X11 入口置灰，提示"当前系统镜像不含桌面，可在系统镜像页更换/下载桌面版" |
+| 无容器守护进程 | Home 容器计数显示 `—`（不报错），容器页隐藏 |
+| 无 pulseaudio（4713） | 音频选项隐藏 |
+| dropbear / Ready! | **必需**，`boot-test` 仍以 `Ready!` 为通过标准 |
+
+实现上由 manifest 的 `capabilities` 字段驱动（§4.6），**而不是**应用探测端口 ——
+探测会引入启动时延与假阴性；manifest 由镜像作者声明，应用只读。
+
+### 4.6 能力声明（capabilities）
+
+manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
+
+```jsonc
+"capabilities": {
+  "ssh": true,          // dropbear :22            → 必为 true
+  "x11": false,         // Xvnc :5900 + pulse :4713
+  "containers": false,  // docker/podman/lxc 守护进程
+  "desktop_profile": false,
+  "downloads_share": true,  // 9p/vsock Downloads 共享
+  "usb_passthrough_host": true  // 与镜像无关，始终由应用决定（列出仅为完整性）
+}
+```
+
+- 应用 UI 以 `capabilities` 作为**唯一真值来源**；缺失该字段的旧镜像按
+  `{ssh:true, x11:true, containers:true}` 兼容解释（对齐上游全量镜像的预期）。
+- 端口转发页：不可用能力对应的隐式转发不展示、不启用。
+
+### 4.7 镜像路线图（系统可更换 = 后续只加镜像）
+
+| 阶段 | 文件名 | identity | 内容 | 说明 |
+|---|---|---|---|---|
+| **首发** | `debian.img` | `debian:trixie` | 最小化（本节） | 契约全通、`Ready!` |
+| 二期 | `debian-desktop.img` | `debian:trixie` | + Xvnc + pulseaudio + 字体 | 同 identity → **免重置切换** |
+| 二期 | `debian-containers.img` | `debian:trixie` | + docker/podman/lxc | 同上 |
+| 三期 | `debian-full.img` | `debian:trixie` | 桌面 + 容器 = 等价当前全量构建 | 迁移旧用户 |
+| 三期+ | `ubuntu.img` / `alpine.img` / … | `ubuntu:24.04` / `alpine:3.24` | 其他发行版 | 新 identity → 切换时按 §5.2 重置 |
+
+规则：
+
+1. **同 identity 家族**（`debian:*` 之间）切换**永不触发重置**，数据盘保留。
+2. **跨发行版**切换触发 `RESET_REQUIRED`（一次确认）。
+3. 每个镜像独立发布为 Release 资产 + 更新 `catalog.json`，**应用无需发版**。
+4. `identity` 只写发行版+版本（如 `debian:trixie`），不写 variant，
+   使 minimal/desktop/containers/full 之间可以自由互切。
+
+### 4.8 账户与 SSH 登录规范（所有镜像强制）
+
+**每个系统镜像（含后续所有发行版）在构建期固化以下账户，作为镜像规范的一部分，
+在 `catalog.json` 与 manifest 中声明：**
+
+| 账户 | 密码 | 组 / 权限 | 用途 |
+|---|---|---|---|
+| `root` | `123` | — | 管理、调试、回归脚本（与上游 `Podroid-Debian` 一致） |
+| `ltbkq` | `123` | `sudo` 组，`NOPASSWD:ALL` | **日常账户**，推荐登录入口 |
+
+要求：
+
+1. **SSH 使用系统默认端口 22**（guest 内 dropbear 监听 `:22`，
+   **不改端口**，与上游一致）。`9922` 只是 adb 在宿主侧的转发端口，
+   与 guest 内端口无关。两个账户都必须能通过 SSH 登录：
+   ```sh
+   adb forward tcp:9922 tcp:22     # 宿主 9922 -> guest 22（SSH 默认端口）
+   ssh root@localhost  -p 9922   # 密码 123
+   ssh ltbkq@localhost -p 9922   # 密码 123
+   ```
+
+   端口约定（guest 内，均为系统默认，不自定义）：
+
+   | 服务 | guest 端口 | 说明 |
+   |---|---|---|
+   | **SSH（dropbear）** | **22** | 系统默认端口，本规范强制 |
+   | Xvnc | 5900 | 系统默认（镜像含桌面时才存在） |
+   | pulseaudio TCP | 4713 | 上游约定 |
+   | host bridge | hvc2 / vsock 9101 | 非 TCP |
+
+   宿主侧转发（仅供 adb/本机访问，均只绑回环）：
+   `9922 → 22`、`5900 → 5900`、`4713 → 4713`。
+2. dropbear 配置不得限制 `root` 登录（`PermitRootLogin` 等价语义 = 允许），
+   并允许两个账户的**密码认证**（无密钥也能进）。
+3. `ltbkq` 的家目录 `/home/ltbkq` 必须在首次启动可用（`skel` 拷贝完成），
+   默认 shell 为发行版的 login shell（Debian: `/bin/bash`）。
+4. `ltbkq` 免密 sudo，使其能执行 `apt install` / `systemctl` 等日常操作。
+5. **构建期实现**（`Podroid-Debian` 侧，chroot 内）：
+   ```
+   useradd -m -s /bin/bash -G sudo ltbkq
+   echo 'root:123'   | chpasswd
+   echo 'ltbkq:123'  | chpasswd
+   echo 'ltbkq ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ltbkq
+   # dropbear: 允许 root 登录 + 密码认证（/etc/default/dropbear）
+   DROPBEAR_EXTRA_OPTIONS="-B"        # 允许 root，不使用 -w（-w 才是禁 root）
+   ```
+   写入点与现有 `build/rootfs-finalize.sh`（当前只设 root 密码）合并。
+6. manifest 声明（应用据此在 UI 显示"SSH 登录帮助"，见 §8）：
+   ```jsonc
+   "accounts": {
+     "ssh": [
+       {"user": "root",  "password": "123", "sudo": false},
+       {"user": "ltbkq", "password": "123", "sudo": true}
+     ],
+     "default_user": "ltbkq"
+   }
+   ```
+7. **与应用的关系**：账户属于**镜像内容**，应用不创建、不改写账户；
+   应用只在 UI 中展示 manifest 声明的登录信息（Terminal 页脚提示
+   `ssh -p 9922 ltbkq@localhost`）。
+8. **兼容性**：上游 `Podroid-Debian` 现有镜像只有 `root/123` —
+   manifest 缺 `accounts` 字段时按 `{root only}` 解释，UI 只提示 root。
+
+> 注意：`ltbkq` 作为账户名是用户指定的固定值，写入构建脚本与规范；
+> 后续发行版（ubuntu.img / alpine.img …）**必须同样满足**本节第 1–4 条，
+> 否则镜像不得上架 catalog。
+
+---
+
+## 5. 镜像生命周期
+
+### 5.1 状态机
+
+```
+                    ┌──────────────────────────────────────────┐
+                    │                                          │
+   (无) ──import──▶ │ IMPORTING ──校验通过──▶ INSTALLED ──激活──▶ ACTIVE │
+        ──download─▶│ DOWNLOADING(%)/RESUMABLE   │  ▲          │      │
+                    │      │                     │  └──切换────┘      │
+                    │      └──校验失败──▶ CORRUPT ┴─重新下载/删除      │
+                    │                          │                      │
+                    │      identity 与当前不同 ─┴──▶ RESET_REQUIRED    │
+                    │                                   │ 用户确认     │
+                    │                                   ▼              │
+                    │                              重建 storage.img    │
+                    │                                   │              │
+                    │                                   └──▶ ACTIVE ◀──┘
+                    └──────────────────────────────────────────┘
+```
+
+| 状态 | 含义 | UI 表现 |
+|---|---|---|
+| `ABSENT` | 未安装任何镜像 | Home 禁用启动按钮；进入引导页（下载/导入） |
+| `DOWNLOADING` | `.part` 下载中，支持续传 | 进度条、速度、剩余时间、暂停/继续 |
+| `IMPORTING` | SAF 选择的文件流式拷贝进 `images/` | 进度条（按已拷贝字节） |
+| `VERIFYING` | 流式 sha256 + manifest 校验 | 校验动画（与下载/导入同一遍读取完成，见 §6.3） |
+| `INSTALLED` | 校验通过、记录写入 `.meta.json`，未激活 | 卡片"安装"按钮 |
+| `ACTIVE` | 当前启动将使用的镜像 | 高亮"使用中" |
+| `RESET_REQUIRED` | 目标镜像 `identity` ≠ 当前 `identity` | 阻断式对话框：需清空 `storage.img`（或高级：保留数据，风险自负） |
+| `CORRUPT` | 校验失败 / 文件被截断 | 红色警示 + 重新下载 / 删除 |
+| `STORAGE_FULL` | 空间不足 | 预检失败，下载前拦截 |
+
+### 5.2 identity（换镜像是否需要重置数据盘的判据）
+
+这是本设计的关键语义，比上游"永远要求手动 Reset VM"更精确：
+
+| 场景 | identity 比较 | 结果 |
+|---|---|---|
+| Debian 33 → Debian 34（同发行版升级） | `debian:trixie` == `debian:trixie` | **无需重置**，overlay copy-up 平滑升级 |
+| Alpine → Debian | `alpine:3.24` ≠ `debian:trixie` | **必须重置**（否则 Alpine copy-up 文件遮蔽 Debian，即 PLAN.md 中的坑） |
+| 同一 `.img` 重复导入 | 相同 sha256 | 无需重置 |
+| 裸 squashfs（无 manifest）A → B | `sha256:aaaa` ≠ `sha256:bbbb` | 视为不同 identity → 要求重置（**安全默认**） |
+| 裸 squashfs 重新导入同一文件 | sha256 相同 | 无需重置 |
+
+规则：
+
+- 有 manifest → `identity = manifest.image.identity`（例如 `debian:trixie`，跨版本稳定）。
+- 无 manifest（裸 squashfs）→ `identity = "sha256:" + <前 16 hex>`。
+- 激活时若 `new.identity != active.identity` → 进入 `RESET_REQUIRED`，
+  用户确认后由应用**重建 `storage.img`**（等价于 Reset VM），再激活。
+- 防御纵深（可选，Phase 6）：把 `podroid.image_identity=` 加入内核 cmdline，
+  guest 侧 `podroid-migrate` 比对 `/etc/podroid/identity` 并在不匹配时拒绝启动覆盖写入。
+
+### 5.3 激活与回滚
+
+- `images/active.json` 记录 `{image_id, identity, sha256, activated_at}`。
+- 允许保留多个已安装镜像（建议上限 2，超出时提示删除最旧的非激活镜像）。
+- 回滚 = 激活另一张已安装镜像（同 identity 无需重置）。
+- v1 不做 A/B 自动回滚（启动失败自动切回），列入 §14 开放问题。
+
+### 5.4 兼容导入（降级路径）
+
+除 `.img` 外，接受以下输入：
+
+| 输入 | 识别方式 | 处理 |
+|---|---|---|
+| VMDroid `.img` | 尾部 footer magic | 完整 manifest 流程 |
+| 裸 squashfs（`hsqs` @0x0，无 footer） | 魔数 + 无 footer | 合成最小 manifest（identity = sha256 前缀），仍零拷贝直挂 |
+| `Podroid-Debian` 的 `debian-rootfs.squashfs` | 同上 | 同上（**现有产物可直接导入，无需重建**） |
+| 上游 `alpine-rootfs.squashfs` | 同上 | 同上（作为回归基线） |
+| 其他文件 | 魔数不符 | 拒绝并提示 |
+
+---
+
+## 6. 分发：目录、下载、导入
+
+### 6.1 镜像目录（catalog）
+
+托管在 GitHub Releases（默认订阅 `Podroid-Debian` 的 release），应用内可改订阅 URL。
+
+```jsonc
+// GET https://github.com/ltbkq/Podroid-Debian/releases/latest/download/catalog.json
+{
+  "schema": 1,
+  "generated_at": "2026-10-07T12:00:00Z",
+  "publisher": { "name": "Podroid-Debian", "ed25519_key": "base64..." },
+  "images": [
+    {
+      "image_id": "debian-trixie-arm64-2026.10.0-r1",
+      "display_name": "Debian 13 (trixie) arm64",
+      "identity": "debian:trixie",
+      "version": "2026.10.0-r1",
+      "system_version": 33,
+      "arch": "arm64",
+      "channel": "stable",
+      "url": "https://github.com/ltbkq/Podroid-Debian/releases/download/v33/debian-trixie-arm64.img",
+      "size": 346_004_992,
+      "sha256": "…64 hex…",
+      "app_min_version_code": 1,
+      "notes": "系统自带 systemd + docker + Xvnc；root/123"
+    }
+  ]
+}
+```
+
+- **信任模型 v1**：HTTPS + 目录内 `sha256`（下载后再校验一遍，防 CDN/传输篡改需目录签名）。
+- **信任模型 v2（Phase 7）**：`publisher.ed25519_key` 内置 APK，对目录 JSON 做
+  Ed25519 detached signature（minisign 风格），签名不对则拒绝加载目录。
+
+### 6.2 下载（断点续传）
+
+```
+ImageDownloader
+  1. 预检：可用空间 ≥ size + 余量（StorageManager），否则 STORAGE_FULL
+  2. HEAD/Range: bytes=<downloaded>-   → 写 images/<id>.img.part
+     - 服务端 206 → 续传；416/无 Range 支持 → 从 0 重来
+     - ETag/Last-Changed 变化 → 丢弃 .part 重下
+  3. 每块同时喂 sha256（无需第二遍读文件）
+  4. 完成后 sha256 == catalog.sha256？→ 否：删除 .part，标记 CORRUPT，可重试
+  5. fsync + rename(.part → .img) + 写 .meta.json → INSTALLED
+  6. 断电安全：.part 永不冒充成品（沿用上游"原子 rename"思想，见
+     PodroidApplication.copyAssetAtomically, :219-236）
+```
+
+- 进度上报到通知栏 + UI；进程被杀后**下次进入应用自动续传**。
+- 移动网络默认提示（可设置"仅 Wi-Fi 下载"）。
+
+### 6.3 手动导入（SAF）
+
+```
+用户: 设置 → 系统镜像 → 从文件导入 → ACTION_OPEN_DOCUMENT(*/*)
+  1. content:// URI 读取 size（未知则边读边扩展）
+  2. 流式拷贝到 images/<name>.img.part，同一遍计算 sha256 / 解析 footer
+  3. 校验 footer.manifest_sha256（有 footer 时）
+  4. 空间预检（拷贝前先查 size，减少半途失败）
+  5. 原子 rename → .meta.json → INSTALLED
+```
+
+- **不使用 `content://` 直挂**：QEMU/crosvm 需要真实可 seek 的文件路径，
+  SAF URI 不可保证（且跨进程 FD 生命周期不可控）→ **导入即拷贝**到应用私有目录。
+- 已在应用可读共享目录（如 `Download/`）的文件，v1 也走拷贝（一致性优先）；
+  "直接引用外部路径"作为 §14 开放问题（需验证 scoped storage 下 QEMU 打开 `/storage/emulated/0/...` 的能力）。
+
+### 6.4 校验记录（避免每次启动重算 300 MB）
+
+`.meta.json = { sha256, size, mtime, verified_at, format_version }`
+
+启动前置条件（`BootGuard`）：
+
+- `.img` 存在且 `size`/`mtime` 与 `.meta.json` 一致 → 信任，直接启动（不重算 sha256）。
+- 不一致 → 重新校验 → 失败则 `CORRUPT`，阻止启动。
+- 设置页提供"立即校验"手动按钮（全量 sha256）。
+
+---
+
+## 7. 引擎改造点（具体到文件）
+
+改动面刻意保持极小：**引擎只把"硬编码文件名"换成"镜像仓库查询"**。
+
+### 7.1 QemuEngine（上游 `engine/QemuEngine.kt`）
+
+```kotlin
+// 现状 (QemuEngine.kt:575-582)
+val rootfsImg = File(context.filesDir, "alpine-rootfs.squashfs")
+if (rootfsImg.exists()) { ... args += "-drive" ... readonly=on ... }
+
+// VMDroid
+val rootfsImg = systemImageRepo.activeRootfsPath()   // null = 无镜像
+    ?: return BootGuard.block("NO_SYSTEM_IMAGE")     // ★ 不再静默省略 drive2
+args += "-drive"; args += "file=${rootfsImg},if=none,id=drive2,format=raw,readonly=on,..."
+```
+
+| 位置 | 改动 |
+|---|---|
+| `QemuEngine.kt:575` | 硬编码文件名 → `systemImageRepo.activeRootfsPath()` |
+| `QemuEngine.kt:576` | `if (exists)` 静默跳过 → **无镜像直接 fail fast**（现状会启动一台 `init-podroid` 挂载失败的死机） |
+| `QemuEngine.kt:558-573` | `storage.img` 逻辑 **不变**（种子恢复在镜像管理器里做，不进引擎） |
+| `QemuEngine.kt:532-533, 552-556` | 内核/initrd **不变**（仍来自 APK 资产） |
+| `QemuEngine.kt:537-547` | cmdline 不变（`console=ttyAMA0`、`podroid.*`）；可选追加 `podroid.image_identity=`（§5.2） |
+| `QemuEngine.kt:585-620` | 9p 下载共享、SLIRP 端口转发 **不变** |
+
+### 7.2 AvfEngine（上游 `engine/avf/AvfEngine.kt`）
+
+| 位置 | 改动 |
+|---|---|
+| `AvfEngine.kt:1027-1028` | `File(filesDir,"alpine-rootfs.squashfs")` + `require(exists)` → `systemImageRepo.activeRootfsPath()`；错误转成 UI 可读状态而非 `IllegalArgumentException` |
+| `AvfEngine.kt:1084-1085` | `addDisk(storage, writable=true)` / `addDisk(squashfs, writable=false)` 的路径来源改为仓库 |
+| `AvfEngine.kt:929-962` | `ensureStorageImage()` **不变**（sparse 创建、只增不减、`resize2fs` 由 guest 做） |
+
+### 7.3 PodroidApplication（上游 `:103-108`）
+
+```kotlin
+val tasks = listOf(
+    { copyAssetDir("qemu", filesDir, forceCopy) },
+    { copyAssetIfNeeded("vmlinuz-virt", File(filesDir, "vmlinuz-virt"), forceCopy) },
+    { copyAssetIfNeeded("initrd.img",   File(filesDir, "initrd.img"),   forceCopy) },
+    // ★ 删除: { copyAssetIfNeeded("alpine-rootfs.squashfs", ...) }
+)
+```
+
+- `.assets_stamp` 机制、原子复制、线程池 **原样保留**。
+- 启动前 `awaitAssetsReady()`（现在只等固件）+ 新增 `awaitImagesReady()`
+  （等 `.meta.json` 校验判定完成），两者都完成后才允许 `start()`。
+
+### 7.4 无镜像 / 异常态（BootGuard）
+
+| 条件 | 行为 |
+|---|---|
+| 未安装镜像 | 引导页：**下载推荐镜像** / **从文件导入**；Home 启动按钮禁用 |
+| `.meta.json` 校验失败 | `CORRUPT`：重新下载 / 删除重导 |
+| `app_min_version_code > 当前版本` | 拒绝激活，提示升级应用 |
+| `arch != arm64` / `format_version` 过新 | 拒绝激活 |
+| `storage.img` 缺失 | 由 `ensureStorageImage()` 正常创建（现状行为） |
+| 激活时 identity 不匹配 | `RESET_REQUIRED` 对话框（§5.2） |
+
+---
+
+## 8. UI / UX
+
+### 8.1 新增"系统镜像"页面（Settings → System Images）
+
+```
+┌─ 系统镜像 ────────────────────────────────┐
+│ ● 使用中  Debian 13 (trixie) arm64        │
+│   v2026.10.0-r1 · 329 MB · debian:trixie  │
+│   [校验] [恢复出厂(用种子)] [移除]          │
+│                                           │
+│ ○ 已安装  Alpine 3.24 arm64  (回滚备选)    │
+│   [激活] [校验] [移除]                     │
+│                                           │
+│ ── 在线目录 (Podroid-Debian) ──           │
+│   Debian 13 (trixie)  v33   [下载]        │
+│   ▓▓▓▓▓▓▓░░░ 68% · 4.2 MB/s · 12s        │
+│                                           │
+│ [从文件导入…]        [刷新目录] [订阅设置] │
+└───────────────────────────────────────────┘
+```
+
+### 8.2 首次启动（无镜像）
+
+```
+启动 App → BootGuard: ABSENT
+  → Setup 第 2 步（复用上游 setup wizard 逻辑）
+      ① 下载推荐镜像（默认选中，显示体积/网络提示）
+      ② 从文件导入（.img 或 .squashfs）
+      ③ 稍后再说（Home 可浏览，启动按钮禁用）
+  → 完成后进入正常 Home
+```
+
+### 8.3 激活冲突对话框（identity 变更）
+
+```
+┌─ 需要重置虚拟机数据 ──────────────────────────┐
+│ 目标镜像与当前系统不同（alpine:3.24 →          │
+│ debian:trixie）。为保证可启动，需要清空         │
+│ 虚拟机数据盘 storage.img。                      │
+│                                                │
+│ 将删除：容器数据、apt/apk 已装包、/root 内容     │
+│ 不会删除：已下载的系统镜像                        │
+│                                                │
+│ [重置并切换]   [取消]                           │
+│  ▢ 高级：保留数据（可能导致系统无法启动）         │
+└────────────────────────────────────────────────┘
+```
+
+### 8.4 其余页面
+
+Home / Terminal / X11 / Settings / 端口转发 / 备份 **沿用上游**，
+仅增加"系统镜像"入口与无镜像态的启动禁用提示。
+
+---
+
+## 9. 关键时序
+
+### 9.1 首次启动下载
+
+```
+User → ImageManager: 下载 Debian
+CatalogRepo → HTTPS GET catalog.json → 校验(签名) → 展示列表
+ImageDownloader:
+   预检空间 → GET .part(0-) → [写盘 + sha256]n 块 → 完成
+   → sha256 比对 → fsync → rename → meta.json → INSTALLED
+ImageManager: identity 比对(首个镜像=无冲突) → 激活 → ACTIVE
+User → Home: 启动 VM
+BootGuard: .img 存在 + meta 一致 + arch/format/app 版本 OK → PASS
+VmdroidService → EngineHolder → QemuEngine.start()
+   -kernel filesDir/vmlinuz-virt  -initrd filesDir/initrd.img
+   -drive storage.img(vda,rw)     -drive images/<id>.img(vdb,ro)
+guest: init-podroid → overlay → systemd → markers → Ready!
+BootStageDetector: "Ready!" → VmState.Running → 终端自动连接
+```
+
+### 9.2 应用升级（对比现状的收益）
+
+```
+现状: APK 升级 → lastUpdateTime 变 → 强制重拷 300 MB rootfs
+VMDroid: APK 升级 → 只重拷 ~20 MB 固件；镜像 .img 不动 → 秒级完成
+```
+
+### 9.3 系统升级（同 identity）
+
+```
+目录出现新版 → 下载新 .img → 校验 → 激活(同 identity，无需重置)
+→ 下次启动用新 lower，旧 upper copy-up 继续生效 → 版本号 system_version 更新
+（旧镜像可保留作回滚）
+```
+
+---
+
+## 10. 安全设计
+
+| # | 措施 | 说明 |
+|---|---|---|
+| S1 | 全量 sha256 校验 | 下载与导入都必须校验；`.meta.json` 记录，启动前比对 size/mtime |
+| S2 | TLS + 目录签名 | v1 HTTPS+sha256；v2 目录 Ed25519 签名（公钥内置） |
+| S3 | 原子落盘 | `.part` → fsync → rename，断电不会留下"看起来完整"的镜像 |
+| S4 | 应用私有目录 | `.img` 存于 `filesDir/images/`，受 Android FBE 保护，其他应用不可读 |
+| S5 | 空间预检 | 下载/导入前检查，避免半成品占位 |
+| S6 | 无镜像不启动 | 消除"启动一台挂载失败的死机"的现状缺陷（`QemuEngine.kt:576`） |
+| S7 | SSH 转发默认仅回环 | 见 §10.3 |
+| S8 | 镜像内容信任 | `.img` 内是完整 rootfs（root 权限在 guest 内），**只从可信目录/可信文件导入**；导入未知文件时 UI 明确警告 |
+
+### 10.1 Guest 默认凭据（继承现状，按 §4.8 规范化）
+
+现状（`Podroid-Debian`）：仅 `root / 123`，隐式转发 `9922 → guest:22`。
+`docs/DELTAS.md` 已知缺口 #2 明确写着"安全性依赖于没有 LAN 转发"。
+
+**端口规范**：SSH 端口 **永远是 guest 内的 22（系统默认）**，镜像与应用都
+**不修改** guest 端口；`9922` 只是 adb/QEMU 在宿主侧的转发端口，
+应用与文档统一表述为 `宿主 9922 → guest 22`。
+
+**VMDroid 规范（§4.8，所有镜像强制）**：`root/123` 与 `ltbkq/123` 并存，
+两者均可 SSH 登录；`ltbkq` 免密 sudo 作为日常账户。
+
+VMDroid 应用侧配套（Phase 7）：
+
+1. QEMU 隐式 SSH 转发改为 `hostfwd=tcp:127.0.0.1:9922-:22`（仅回环）；
+   设置里提供"允许局域网 SSH"开关（默认关）。
+2. Terminal 页脚常驻显示登录提示（数据来自 manifest `accounts`）：
+   `ssh ltbkq@localhost -p 9922  (pw: 123)`。
+3. **不动契约**：guest 侧 dropbear 行为、9922 端口号不变，只收紧 host 侧绑定。
+4. 密码 `123` 是**默认值**，安全边界依赖"仅回环转发 + 应用私有网络命名空间"；
+   不强制首启改密（会破坏 boot-test 与用户预期），但 Settings 提供
+   "修改 guest 密码"入口（调用 guest `chpasswd`）。
+
+> 注意：改 `hostfwd` 绑定不影响 `adb forward tcp:9922 tcp:22`（本机回环 → guest 22），
+> 故 `Podroid-Debian/tools/boot-test.sh` 冒烟测试不受影响。
+
+---
+
+## 11. 兼容性与迁移
+
+### 11.1 从 Podroid 迁移
+
+| 资产 | 可否自动迁移 | 说明 |
+|---|---|---|
+| `storage.img`（用户数据/容器） | ❌ 默认不可 | 应用私有目录跨包不可读；换包名 + 不同签名 → 必须卸载重装 |
+| `alpine-rootfs.squashfs` | ❌ 不自动 | 但可通过 SAF 重新导入（§5.4 兼容裸 squashfs） |
+| 端口转发/设置 | ❌ | DataStore 私有 |
+| 可行路径 | 手动 | ① 重新下载镜像 ② 用户从文件导入旧镜像 ③ 数据盘从零开始 |
+
+> 迁移工具（若设备可 `adb`）：`adb shell run-as <pkg>` 仅 debug 包可用，
+> release 包无法跨应用导出 `storage.img` → 文档明确"首次使用需重新准备系统镜像"。
+> 若未来获得上游发布密钥或同签名升级路径，可改为原地升级（届时包名应保持 `com.excp.podroid`）。
+
+### 11.2 与 Podroid-Debian 的分工
+
+| 仓库 | 职责 | 产物 |
+|---|---|---|
+| `ltbkq/vmdroid`（本仓库） | VM 应用 + 镜像管理 | `vmdroid-<ver>.apk`（≈70 MB）、镜像格式工具 `vmd-img` |
+| `ltbkq/Podroid-Debian` | 构建 Guest rootfs、打包 `.img` | `*.img`、`catalog.json`、Release 资产 |
+| `ExTV/Podroid` | 上游 VM 功能 | fork 源头 |
+
+`Podroid-Debian` 侧需要新增（不改现有流水线）：
+
+```sh
+tools/mkimg.sh --rootfs out/debian-rootfs.squashfs \
+               --identity debian:trixie --version 2026.10.0-r1 \
+               --system-version 33 [--seed seed.ext4] \
+               -o out/debian-trixie-arm64.img      # 生成 .img（追加 manifest + footer）
+tools/catalog.sh ... > catalog.json                # 生成目录
+tools/boot-test.sh                                 # 沿用（Ready! 冒烟）
+```
+
+> 现有 `out/debian-rootfs.squashfs` 无需重新构建，`mkimg.sh` 只是**在尾部追加**，
+> 秒级完成；`tools/graft.sh`（打进 APK 资产）保留为 legacy 路径。
+
+### 11.3 Android / 后端矩阵
+
+| 维度 | 要求 |
+|---|---|
+| minSdk 26 (Android 8) / targetSdk 36 | 与上游一致 |
+| 架构 | arm64 only（上游 QEMU `aarch64-softmmu`、AVF 亦然） |
+| QEMU/TCG 后端 | 默认，无需特殊权限 |
+| AVF/pKVM 后端 | `pm grant MANAGE_VIRTUAL_MACHINE` + `USE_CUSTOM_VIRTUAL_MACHINE`；**.img 直挂能力需真机验证**（P0） |
+| 16KB page size | jniLibs 保持 `-Wl,-z,max-page-size=16384`（上游强制） |
+
+### 11.4 `.img` 的可移植性（附带收益）
+
+`.img` 就是一个带尾部元数据的 squashfs，因此：
+
+- PC 上可 `sudo unsquashfs -s debian-trixie-arm64.img` 查看内容；
+- 可直接当只读盘喂给 QEMU（配合 APK 里的 `vmlinuz-virt`/`initrd.img` 与
+  `init-podroid` 契约）；
+- 可整份拷贝备份，或放进网盘分发。
+
+（文档阶段列为附带收益，不承诺提供 PC 端启动支持。）
+
+---
+
+## 12. 构建与发布
+
+### 12.1 应用侧（本仓库）
+
+| 项 | 决定 |
+|---|---|
+| 包名 | `io.github.ltbkq.vmdroid`（debug 加 `.debug` 后缀） |
+| 应用名 | VMDroid（`strings.xml` 同步 `values-zh`） |
+| 资产 | 只剩 `vmlinuz-virt`、`initrd.img`、`qemu/`（**移除 rootfs**） |
+| Gradle | 移除 rootfs 打包/noCompress 相关配置；`versionCode` 与镜像解耦（应用版本 ≠ `system_version`） |
+| 签名 | 复用 `Podroid-Debian/keys/` 的项目密钥思路：keystore 不进 VCS，密码经 `-P` 传入 |
+| 上游同步 | 保留 `upstream` remote，便于 cherry-pick 上游 VM 功能修复 |
+
+预期 APK：**367 MB → ≈ 70 MB**（-81%）。
+
+### 12.2 镜像侧（Podroid-Debian）
+
+- `build-rootfs.sh` 产出 `.squashfs`（不变）→ 新增 `mkimg.sh` 包装为 `.img`。
+- CI（GitHub Actions，arm64 runner 或现有 local/docker 路径）：
+  构建 rootfs → `mkimg` → 计算 sha256 → 上传 Release → 生成 `catalog.json`。
+
+### 12.3 发布物
+
+| 产物 | 位置 | 说明 |
+|---|---|---|
+| `vmdroid-<ver>.apk` | 本仓库 Release | ≈70 MB |
+| `<image>.img` | Podroid-Debian Release | ~330 MB，单文件系统 |
+| `catalog.json`(+ `.sig`) | 同上 `latest/download/` | 应用默认订阅 |
+| 源码 | 两仓库 | GPLv2 §6/§63 合规（源码 + 构建说明） |
+
+---
+
+## 13. 测试与验收
+
+### 13.1 自动化
+
+| 层 | 内容 |
+|---|---|
+| 单元（JVM） | `VmdImageCodec`：往返编解码、footer 定位、字段缺省、截断/损坏/错位拒绝；identity 规则表（§5.2 全表）；状态机迁移；sha256 流式校验 |
+| 工具侧 | `mkimg.sh` 与 Kotlin codec **互操作**（工具产出 ↔ 应用解析）；测试向量入库 |
+| 下载 | Range 续传（含 416 回退）、ETag 变化重下、`.part` 断点恢复、校验失败清理 |
+| 回归（沿用） | `Podroid-Debian/tests/test_dns.sh`、`tools/boot-test.sh`（轮询 `Ready!`） |
+| **账户规范（§4.8）** | 镜像检查脚本：`getent passwd ltbkq` 存在、sudoers.d 生效、dropbear 允许 root 与密码登录、`shadow` 中两账户密码哈希存在 |
+
+### 13.2 真机冒烟矩阵
+
+| 用例 | QEMU 后端 | AVF 后端 |
+|---|---|---|
+| 无镜像启动 → 引导页（**不启动死机**） | ✅ 必测 | ✅ 必测 |
+| 导入 `.img` → 激活 → `Ready!` | ✅ | ✅（P0 spike） |
+| 导入裸 squashfs → 激活 → `Ready!` | ✅ | ✅ |
+| 下载 60% 杀进程 → 续传 → 校验 → 激活 | ✅ | ✅ |
+| 损坏镜像（改 1 字节）→ 拒绝启动 | ✅ | ✅ |
+| 同 identity 升级 → 数据保留 | ✅ | ✅ |
+| 换 identity → 强制重置 → 正常启动 | ✅ | ✅ |
+| APK 升级后镜像**不被**重拷（耗时 <5s） | ✅ | ✅ |
+| **SSH 双账户登录（guest 端口 22，宿主 9922）**：`ssh root@localhost -p 9922` 与 `ssh ltbkq@localhost -p 9922`（密码 `123`）均成功 | ✅ | ✅ |
+| `ltbkq` 免密 sudo 可用（`sudo -n true`） | ✅ | ✅ |
+| 无 Xvnc/无容器镜像（`debian.img`）→ UI 能力降级不报错 | ✅ | ✅ |
+| 终端 / VNC / 端口转发 / host bridge / USB | ✅ | ✅（USB QEMU 专属） |
+
+### 13.3 P0 风险 spike（先于编码）
+
+1. **尾随数据直挂**：现有 `debian-rootfs.squashfs` 追加 4 KiB 垃圾，
+   在真机 QEMU 后端挂 `/dev/vdb` → 能否正常 mount 并进入 `Ready!`。
+2. 同上在 AVF 后端（crosvm）验证。
+3. 若 1 或 2 失败 → 启用 §4.3 `extract` 降级路径（设计已兼容）。
+
+---
+
+## 14. 里程碑
+
+| 阶段 | 内容 | 退出标准 | 预估 |
+|---|---|---|---|
+| **M0** 规格冻结 | 本设计评审 + P0 spike（§13.3） | spike 结论：direct 可行 / 需降级 | 1 天 |
+| **M1** 骨架 | fork 上游 → 改名/包名/品牌 → 移除 rootfs 资产 → 打包 | APK ≈70 MB 可安装；无镜像时进引导页 | 2–3 天 |
+| **M2** 格式与工具 | `VmdImageCodec` + `mkimg.sh` + 测试向量 | 互操作测试通过 | 2 天 |
+| **M3** 镜像管理 | 导入/校验/激活/删除/BootGuard/identity 重置 | §13.2 中"导入/损坏/identity"用例通过 | 3 天 |
+| **M4** 下载 | 目录 + 断点续传 + 通知进度 | 60% 杀进程续传用例通过 | 2–3 天 |
+| **M5** 恢复出厂 | 种子提取应用到 `storage.img` | Reset 与"用种子恢复"行为正确 | 1–2 天 |
+| **M6** 回归 | 真机双后端矩阵 + 契约回归 | §13.2 全绿 | 2 天 |
+| **M7** 发布 | CI、签名、Release、catalog、文档、license 合规 | 首个公开版本 | 1–2 天 |
+
+**合计 ≈ 2 周**（不含 AVF 真机排期依赖）。
+
+---
+
+## 15. 开放问题
+
+| # | 问题 | 倾向 |
+|---|---|---|
+| Q1 | `.img` 直挂（direct）在 AVF/crosvm 上是否可靠？ | P0 spike 决定；不可靠则走 extract 降级 |
+| Q2 | 是否允许镜像自带 `kernel`/`initrd` payload？ | 格式预留槽位，v1 不实现（内置内核够用） |
+| Q3 | 外部路径直挂（不拷贝到私有目录）是否可行？ | 需验证 scoped storage 下 QEMU/crosvm 打开 `/storage/emulated/0/...` 的能力与性能 |
+| Q4 | 已安装镜像数量上限 / 存储配额策略 | 建议 2 个，超出提示删除 |
+| Q5 | 启动失败自动回滚（A/B） | v1 不做；先做"手动回滚到另一已装镜像" |
+| Q6 | 目录签名（Ed25519）何时启用 | M7 内完成，公钥内置 |
+| Q7 | 包名是否沿用 `com.excp.podroid`（便于未来原地升级） | 当前建议新包名；若预期与上游合并需重新讨论 |
+| Q8 | `.img` 是否需要加密（Android FBE 已保护私有目录） | 暂不额外加密 |
+| Q9 | root 密码 `123` 是否强制首启改密 | **已决**：不强制（§4.8 规定 `root/123` + `ltbkq/123` 为镜像规范），改由回环转发 + Settings 修改入口保证安全 |
+
+---
+
+## 附录 A：术语
+
+| 术语 | 含义 |
+|---|---|
+| VM / 虚拟机 | 由 QEMU(TCG) 或 AVF(pKVM) 运行的 Guest Linux，内核+initrd 来自 APK |
+| 系统镜像 `.img` | 单文件 Guest rootfs（squashfs 前置 + 可选种子 + manifest/footer） |
+| vda | 可写持久盘 `storage.img`（ext4），承载 overlay upper 与容器数据 |
+| vdb | 只读系统盘（`.img`），挂载为 `/mnt/lower` |
+| 启动契约 | `init-podroid` 挂载顺序、控制台标记、tty 角色、端口转发、存储布局 |
+| identity | 镜像的发行版标识，决定切换时是否必须重置数据盘 |
+| 同步点 | `Ready!` 控制台标记 → `VmState.Running`（上游 `BootStageDetector`） |
+
+## 附录 B：参考
+
+- 上游 VM 功能：`ExTV/Podroid`（`CLAUDE.md`、`engine/`）
+- 启动契约：`ltbkq/Podroid-Debian/docs/COMPAT.md`
+- Alpine→Debian 差异：`ltbkq/Podroid-Debian/docs/DELTAS.md`
+- 阶段计划与 APK 重建记录：`ltbkq/Podroid-Debian/docs/PLAN.md`
+- 镜像字节级规格：本仓库 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)
