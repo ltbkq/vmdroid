@@ -126,8 +126,9 @@ offset
   },
 
   "capabilities": {                    // ★ 应用 UI 的唯一真值来源（DESIGN §4.6）
-    "ssh": true,                       // 必须为 true
-    "x11": false,
+    "ssh": true,          // 必须为 true
+    "x11": true,          // Xvnc :5900 + pulse :4713 —— 首发 debian.img 即装
+    "desktop": false,     // 桌面环境 (xfce4)
     "containers": false,
     "desktop_profile": false,
     "downloads_share": true

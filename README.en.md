@@ -27,8 +27,8 @@ A single system file — **Debian 13 (trixie) arm64 minimal install**, target �
 
 | Item | Spec |
 |---|---|
-| Contents | systemd + networking + SSH + boot-contract scripts; **no** desktop / Xvnc / container stack preinstalled |
-| SSH | guest listens on **default port 22** (host: `adb forward tcp:9922 tcp:22`) |
+| Contents | systemd + networking + SSH + **Xvnc/pulseaudio (X11 & audio contract)**; **no** desktop environment / container stack preinstalled |
+| SSH | guest listens on **default port 22** (chain: `adb forward tcp:9922 tcp:9922` → phone `:9922` → guest `:22`) |
 | Accounts | `root` / pw `123`, **`ltbkq` / pw `123` (passwordless sudo)** — both can log in over SSH |
 | Acceptance | `tools/boot-test.sh` polls console for `Ready!`; both accounts SSH in successfully |
 | Later | `debian-desktop.img` / `debian-containers.img` / `ubuntu.img` … images only, no app update |

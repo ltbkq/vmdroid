@@ -56,7 +56,7 @@ Guest 操作系统（`alpine-rootfs.squashfs`）全部打包进同一个 APK。
 | G4 | **保持 vda + vdb 启动契约** | `init-podroid`、内核、initrd、guest 脚本 **零改动** |
 | G5 | 应用内下载 + 手动导入 | 目录订阅 + 断点续传下载；SAF 文件选择器导入；两者均流式校验 |
 | G6 | 不破坏持久化语义 | `storage.img`（vda）跨镜像升级保留；换发行版时按 identity 决定是否必须重置 |
-| G7 | **首发镜像 `debian.img`（最小化）** | 只含启动契约所需组件，不预装桌面/容器；体积 ≤ 150 MB（目标）；`boot-test` 报 `Ready!` |
+| G7 | **首发镜像 `debian.img`（最小化）** | 只含启动契约所需组件（含 Xvnc/pulseaudio，**不含**桌面环境与容器栈）；体积 ≤ 160 MB（目标）；`boot-test` 报 `Ready!` |
 | G8 | 后续系统零应用更新 | 新镜像仅凭 `catalog.json` 上架即可下载、安装、切换（能力差异由 manifest 协商，§4.6） |
 
 ### 1.3 非目标
@@ -253,8 +253,9 @@ manifest 携带，激活前由 `BootGuard` 拦截：
 | 登录账户 | **`root` + `ltbkq` 两个账户，默认密码均为 `123`，均可 SSH 登录** | 仅 `root` |
 | sudo | `ltbkq` 在 sudo 组（`NOPASSWD`） | 无普通用户 |
 | 容器栈 | ❌ 不装 docker/podman/lxc | ✅ 装 |
-| 桌面 / Xvnc / pulseaudio | ❌ 不装 | ✅ 装 |
-| X11 字体 | ❌ 不装 | ✅ 装 |
+| **Xvnc (:5900) + 字体** | ✅ **装**（X11 契约，见下） | ✅ 装 |
+| pulseaudio (:4713) | ✅ 装（音频契约） | ✅ 装 |
+| 桌面环境 (xfce4) | ❌ 不装（用户在 guest 内 `apt install` 或换桌面镜像） | ✅ `--desktop` |
 
 **最小镜像必须保留（启动契约的一部分，缺一不可开机/不可用）**：
 
@@ -267,7 +268,18 @@ util-linux, mount, overlay    → overlayfs 挂载
 /usr/local/bin/podroid-*      → getty/login/resize + overlay-normalize
 /usr/local/lib/podroid/podroid-hostd → host bridge（Home 容器计数、通知、端口转发）
 sudo, ca-certificates, locales(min)  → 基本可用性
+tigervnc-standalone-server, tigervnc-common → podroid-xvnc（:5900，X11 契约）
+xfonts-base, fonts-dejavu-core, dbus-x11   → Xvnc 可用（字体缺失则 X 起不来）
+pulseaudio, pulseaudio-utils          → podroid-pulse（:4713，音频契约）
 ```
+
+**Xvnc 为什么属于"最小镜像必须保留"**：`podroid-xvnc.service` 是
+`Before=podroid-ready.service` 的**启动契约单元**（上游 Alpine 同样有），
+`BootStageDetector` 的 `Ready!` 之前 Xvnc 必须已尝试启动；
+应用侧 X11 查看器直接连 `:5900`。**不装 Xvnc = 契约缺口**，
+因此首发镜像**装 Xvnc，但不装桌面环境**（Xvnc 起来后是空 X display，
+用户在 guest 内 `apt install xfce4 xfce4-terminal` 即可得到桌面，
+或换 `debian-desktop.img`）。
 
 **账户与登录（镜像构建期固化，见 §4.8）**：
 
@@ -278,15 +290,14 @@ dropbear 允许 root + ltbkq 两账户密码登录（两者都能 ssh 进入）
 ```
 
 **首发明确不装**：docker.io / podman / lxc / crun / netavark / aardvark-dns /
-tigervnc(Xvnc) / pulseaudio / X11 / xfce / 字体。
+桌面环境（xfce4、lightdm、x11-utils）。
 
 **这意味着应用侧必须能"优雅降级"**（否则首发镜像会被 UI 判成坏镜像）：
 
 | 能力缺失 | 应用表现 |
 |---|---|
-| 无 Xvnc（5900） | X11 入口置灰，提示"当前系统镜像不含桌面，可在系统镜像页更换/下载桌面版" |
 | 无容器守护进程 | Home 容器计数显示 `—`（不报错），容器页隐藏 |
-| 无 pulseaudio（4713） | 音频选项隐藏 |
+| Xvnc 有、但无桌面 | X11 入口可用，画面为空 X display；提示"在终端执行 `apt install xfce4 xfce4-terminal`，或在系统镜像页切换到桌面版" |
 | dropbear / Ready! | **必需**，`boot-test` 仍以 `Ready!` 为通过标准 |
 
 实现上由 manifest 的 `capabilities` 字段驱动（§4.6），**而不是**应用探测端口 ——
@@ -299,7 +310,8 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 ```jsonc
 "capabilities": {
   "ssh": true,          // dropbear :22            → 必为 true
-  "x11": false,         // Xvnc :5900 + pulse :4713
+  "x11": true,          // Xvnc :5900 + pulse :4713 → 首发 debian.img 即装
+  "desktop": false,     // 桌面环境 (xfce4)          → 首发不含
   "containers": false,  // docker/podman/lxc 守护进程
   "desktop_profile": false,
   "downloads_share": true,  // 9p/vsock Downloads 共享
@@ -315,8 +327,8 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 
 | 阶段 | 文件名 | identity | 内容 | 说明 |
 |---|---|---|---|---|
-| **首发** | `debian.img` | `debian:trixie` | 最小化（本节） | 契约全通、`Ready!` |
-| 二期 | `debian-desktop.img` | `debian:trixie` | + Xvnc + pulseaudio + 字体 | 同 identity → **免重置切换** |
+| **首发** | `debian.img` | `debian:trixie` | 最小化 + Xvnc/pulseaudio（本节） | 契约全通、`Ready!` |
+| 二期 | `debian-desktop.img` | `debian:trixie` | + xfce4 桌面（Xvnc 已有） | 同 identity → **免重置切换** |
 | 二期 | `debian-containers.img` | `debian:trixie` | + docker/podman/lxc | 同上 |
 | 三期 | `debian-full.img` | `debian:trixie` | 桌面 + 容器 = 等价当前全量构建 | 迁移旧用户 |
 | 三期+ | `ubuntu.img` / `alpine.img` / … | `ubuntu:24.04` / `alpine:3.24` | 其他发行版 | 新 identity → 切换时按 §5.2 重置 |
@@ -345,7 +357,7 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
    **不改端口**，与上游一致）。`9922` 只是 adb 在宿主侧的转发端口，
    与 guest 内端口无关。两个账户都必须能通过 SSH 登录：
    ```sh
-   adb forward tcp:9922 tcp:22     # 宿主 9922 -> guest 22（SSH 默认端口）
+   adb forward tcp:9922 tcp:9922   # PC:9922 -> 手机:9922（QEMU hostfwd）-> guest:22
    ssh root@localhost  -p 9922   # 密码 123
    ssh ltbkq@localhost -p 9922   # 密码 123
    ```
@@ -744,7 +756,12 @@ VMDroid 应用侧配套（Phase 7）：
    不强制首启改密（会破坏 boot-test 与用户预期），但 Settings 提供
    "修改 guest 密码"入口（调用 guest `chpasswd`）。
 
-> 注意：改 `hostfwd` 绑定不影响 `adb forward tcp:9922 tcp:22`（本机回环 → guest 22），
+> **端口链路（三层，别写错）**：
+> `PC:9922` —adb forward→ `手机:9922`（QEMU `hostfwd` 监听）→ `guest:22`（dropbear）。
+> 手机上**没有**进程监听 `:22`，所以 `adb forward` 的目标端口必须是 `9929…9922`，
+> 写成 `tcp:22` 会连到无人监听的端口（上游 README 也是 `tcp:9922 tcp:9922`）。
+>
+> 改 `hostfwd` 绑定（0.0.0.0 → 127.0.0.1）不影响 adb forward（它连的是手机本地回环），
 > 故 `Podroid-Debian/tools/boot-test.sh` 冒烟测试不受影响。
 
 ---
@@ -867,7 +884,7 @@ tools/boot-test.sh                                 # 沿用（Ready! 冒烟）
 | APK 升级后镜像**不被**重拷（耗时 <5s） | ✅ | ✅ |
 | **SSH 双账户登录（guest 端口 22，宿主 9922）**：`ssh root@localhost -p 9922` 与 `ssh ltbkq@localhost -p 9922`（密码 `123`）均成功 | ✅ | ✅ |
 | `ltbkq` 免密 sudo 可用（`sudo -n true`） | ✅ | ✅ |
-| 无 Xvnc/无容器镜像（`debian.img`）→ UI 能力降级不报错 | ✅ | ✅ |
+| `debian.img`（Xvnc 有、容器无）→ 容器能力降级不报错；X11 连 `:5900` 成功 | ✅ | ✅ |
 | 终端 / VNC / 端口转发 / host bridge / USB | ✅ | ✅（USB QEMU 专属） |
 
 ### 13.3 P0 风险 spike（先于编码）

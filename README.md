@@ -25,8 +25,8 @@
 
 | 项 | 规格 |
 |---|---|
-| 内容 | systemd + 网络 + SSH + 启动契约脚本；**不预装** 桌面 / Xvnc / 容器栈 |
-| SSH | guest **默认端口 22**（宿主 `adb forward tcp:9922 tcp:22`） |
+| 内容 | systemd + 网络 + SSH + **Xvnc/pulseaudio（X11 与音频契约）**；**不预装** 桌面环境 / 容器栈 |
+| SSH | guest **默认端口 22**（链路 `adb forward tcp:9922 tcp:9922` → 手机 9922 → guest 22） |
 | 账户 | `root` / 密码 `123`，**`ltbkq` / 密码 `123`（免密 sudo）** —— 两者均可 SSH 登录 |
 | 验收 | `tools/boot-test.sh` 轮询 console 到 `Ready!`；双账户 SSH 登录成功 |
 | 后续 | `debian-desktop.img` / `debian-containers.img` / `ubuntu.img` … 只加镜像，不改应用 |
