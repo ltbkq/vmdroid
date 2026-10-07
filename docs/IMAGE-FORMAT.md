@@ -3,7 +3,12 @@
 **版本：format_version = 1** · 关联设计文档 [DESIGN.md](DESIGN.md)
 
 VMDroid 的系统是一个**单文件** `*.img`。它既是一个**可直接挂载的 squashfs**
-（作为 guest 的 `vdb`），又在尾部携带自描述元数据与可选的持久盘种子。
+（作为 guest 的 `vdb`），又在尾部携带自描述元数据与 kernel/initrd payload（PC 启动）。
+
+> **v1 决策（2026-10-08）**：**不携带 vda 种子**。上游 `init-podroid` 已实现
+> "全零盘首启自动 `mkfs.ext4`"，恢复出厂只需把 `storage.img` 清零 —— 种子段
+> 对 v1 是纯负担（无内容可提供 + 增体积 + 稀疏提取复杂度）。原 seed 字段
+> （footer bit0、72–119 字节）在 v1 中**不存在**；未来若需预置数据盘 → `format_version = 2`。
 
 ---
 
@@ -14,7 +19,7 @@ VMDroid 的系统是一个**单文件** `*.img`。它既是一个**可直接挂�
 | 1 | 零拷贝启动 | 文件 0x0 就是 squashfs superblock，可直接 `-drive ...,readonly=on` / `addDisk(writable=false)` |
 | 2 | 单文件自描述 | 尾部 footer 指向 manifest（JSON），含 identity/版本/能力/账户 |
 | 3 | 可校验 | 全文件 sha256（下载时算）+ 每个 payload 的 sha256（footer 内） |
-| 4 | 可携带 vda 种子 | 可选 ext4 payload，用于"恢复出厂" |
+| 4 | 恢复出厂零依赖 | vda 不在镜像内（决策 2026-10-08 移除 seed）：`storage.img` 清零后由 `init-podroid` 自动 `mkfs`，见 DESIGN §4.3 |
 | 5 | 单一格式（**N4**） | **只接受 `.img`**：footer 必需；裸 `.squashfs` 一律拒绝（无 manifest 就无 identity/校验） |
 | 6 | 不改启动契约 | 只提供 `vdb`；`vda`（`storage.img`）由应用创建，见 DESIGN §2.3 |
 
@@ -30,17 +35,12 @@ offset
      ├─────────────────────────────────────────────┤
      │ 零填充 → 对齐到 1 MiB 边界                    │
      ├─────────────────────────────────────────────┤
-     │ persist 种子 (ext4)  [可选, flags.bit0]      │  ← 仅"恢复出厂"时提取为 storage.img
-     │ ... bytes = S ...                           │
-     ├─────────────────────────────────────────────┤
-     │ 零填充 → 对齐到 1 MiB 边界                    │
-     ├─────────────────────────────────────────────┤
-     │ kernel payload (arm64 Image) [flags.bit1]   │  ← ★R-16 PC 端 -kernel
+     │ kernel payload (arm64 Image) [flags.bit0]   │  ← ★R-16 PC 端 -kernel
      │ ... bytes = K ...                           │
      ├─────────────────────────────────────────────┤
      │ 零填充 → 对齐到 1 MiB 边界                    │
      ├─────────────────────────────────────────────┤
-     │ initrd payload             [flags.bit2]     │  ← ★R-16 PC 端 -initrd
+     │ initrd payload             [flags.bit1]     │  ← ★R-16 PC 端 -initrd
      │ ... bytes = I ...                           │
      ├─────────────────────────────────────────────┤
      │ 零填充 → 对齐到 1 MiB 边界                    │
@@ -60,11 +60,10 @@ offset
 |---|---|
 | `rootfs_offset` | 恒为 `0`（format_version 1） |
 | `rootfs_size` | = squashfs `superblock.bytes_used` = `R` |
-| 段对齐 | `seed`、`manifest` 从 **1 MiB** 边界开始；`manifest` 之后零填充至 **4 KiB** 边界即 `footer_offset`，`file_size = footer_offset + 4096`（**footer 不要求 1 MiB 对齐**，R1: A-R1-8/B-R1-4） |
+| 段对齐 | `kernel`、`initrd`、`manifest` 均从 **1 MiB** 边界开始（R2: A-R2-17/B-R2-13）；`manifest` 之后零填充至 **4 KiB** 边界即 `footer_offset`，`file_size = footer_offset + 4096`（**footer 不要求 1 MiB 对齐**，R1: A-R1-8/B-R1-4） |
 | `manifest_size` | `1 ≤ M ≤ 65536` |
-| `seed_size` | `0` 或 `≥ 4096`，且为 4096 的倍数 |
-| `kernel_size` | `0` 或 `≥ 1 MiB`（arm64 `Image`，通常 10–30 MiB；须与 `flags.bit1` 一致） |
-| `initrd_size` | `0` 或 `≥ 4096`（须与 `flags.bit2` 一致） |
+| `kernel_size` | `0` 或 `≥ 1 MiB`（arm64 `Image`，通常 10–30 MiB；须与 `flags.bit0` 一致） |
+| `initrd_size` | `0` 或 `≥ 4096`（须与 `flags.bit1` 一致） |
 | 填充 | 所有洞必须全零（读取方必须容忍非零垃圾：容忍即可，不校验） |
 | 压缩 | 整文件**不额外压缩**（squashfs 自身已 zstd/xz 压缩；外层压缩会破坏直挂） |
 
@@ -86,21 +85,22 @@ offset
 | 24 | 8 | `rootfs_offset` | u64 = `0` |
 | 32 | 8 | `rootfs_size` | u64 = `R` |
 | 40 | 32 | `rootfs_sha256` | 原始字节，覆盖 `[0, R)` |
-| 72 | 8 | `seed_offset` | u64；无种子 = `0` |
-| 80 | 8 | `seed_size` | u64；无种子 = `0` |
-| 88 | 32 | `seed_sha256` | 无种子 = 全零 |
-| 120 | 8 | `manifest_offset` | u64 |
-| 128 | 8 | `manifest_size` | u64 = `M` |
-| 136 | 32 | `manifest_sha256` | 覆盖 manifest 全部 `M` 字节 |
-| 168 | 4 | `flags` | u32：bit0 = `HAS_SEED`，bit1 = `HAS_KERNEL`，bit2 = `HAS_INITRD`，bit3..31 保留（必须为 0） |
-| 172 | 8 | `kernel_offset` | u64；无 = `0`（**R-16**：arm64 `Image` payload，PC 端 `-kernel` 直接用） |
-| 180 | 8 | `kernel_size` | u64；无 = `0` |
-| 188 | 32 | `kernel_sha256` | 无 = 全零 |
-| 220 | 8 | `initrd_offset` | u64；无 = `0`（PC 端 `-initrd`） |
-| 228 | 8 | `initrd_size` | u64；无 = `0` |
-| 236 | 32 | `initrd_sha256` | 无 = 全零 |
-| 268 | 3820 | `reserved` | 全零 |
+| 72 | 8 | `manifest_offset` | u64 |
+| 80 | 8 | `manifest_size` | u64 = `M` |
+| 88 | 32 | `manifest_sha256` | 覆盖 manifest 全部 `M` 字节 |
+| 120 | 4 | `flags` | u32：bit0 = `HAS_KERNEL`，bit1 = `HAS_INITRD`，bit2..31 保留（必须为 0） |
+| 124 | 8 | `kernel_offset` | u64；无 = `0`（**R-16**：arm64 `Image` payload，PC 端 `-kernel` 直接用） |
+| 132 | 8 | `kernel_size` | u64；无 = `0` |
+| 140 | 32 | `kernel_sha256` | 无 = 全零 |
+| 172 | 8 | `initrd_offset` | u64；无 = `0`（PC 端 `-initrd`） |
+| 180 | 8 | `initrd_size` | u64；无 = `0` |
+| 188 | 32 | `initrd_sha256` | 无 = 全零 |
+| 220 | 3868 | `reserved` | 全零 |
 | 4088 | 8 | `magic_tail` | 再次 `"VMDIMG01"`（快速定位/截断检测） |
+
+> **v1 无 seed 字段**（决策 2026-10-08）：原 `seed_offset/seed_size/seed_sha256`
+> （72–119）与 `HAS_SEED`（bit0）已移除，后续字段**前移 48 字节**。
+> format_version 1 尚未发布任何镜像，重编号无兼容负担。
 
 **footer 解析规则**
 
@@ -108,16 +108,15 @@ offset
    - 魔数不匹配 → 走拒绝分支（N4：裸 squashfs 提示封装；否则"非本格式"）。
    - 魔数匹配才检查 `file_size < 8192 → 拒绝`（避免误杀极小合法文件，R1: B-R1-11）。
 2. 校验 `footer_size == 4096`、`format_version ≤ 1`、
-   `flags 保留位为 0`（**合法位 = bit0|bit1|bit2，掩码 `0x7`**；R2: A-R2-1/B-R2-1/C-R2-1）。
+   `flags 保留位为 0`（**合法位 = bit0|bit1，掩码 `0x3`**；R2: A-R2-1/B-R2-1/C-R2-1）。
 3. 校验 `file_size == <实际文件大小>`（否则 = 截断/拼接，拒绝）。
 4. **flags ↔ 段一致性**（R2: B-R2-6/C-R2-2）：
-   `bit0` 置位 ⇔ `seed_size > 0`；`bit1` 置位 ⇔ `kernel_size > 0`；`bit2` 置位 ⇔ `initrd_size > 0`；
+   `bit0` 置位 ⇔ `kernel_size > 0`；`bit1` 置位 ⇔ `initrd_size > 0`；
    未置位时对应 `*_offset`/`*_size` 必须为 0 —— 任一不符按损坏拒绝。
 5. **边界/溢出校验**（R1: B-R1-10，用溢出安全比较 `a > MAX - b`）：
-   - 段序（按 §2 布局）：`rootfs` → `seed` → `kernel` → `initrd` → `manifest` → `footer`；
+   - 段序（按 §2 布局）：`rootfs` → `kernel` → `initrd` → `manifest` → `footer`；
    - 每个**存在的**段 `[offset, offset+size)` 必须落在 `[0, file_size - 4096)` 内；
-   - 无 seed 时 `seed_offset == seed_size == 0`（**不参与不等式链**，
-     否则 `rootfs_size ≤ 0` 恒假 —— R2: B-R2-2）；
+   - 不存在的段 `*_offset == *_size == 0`（**不参与不等式链**，R2: B-R2-2 教训）；
    - `manifest_offset + manifest_size ≤ file_size - 4096`；
    - 任一不满足按损坏拒绝。
 6. 定位 `manifest_offset/manifest_size` → 读出 → sha256 比对。
@@ -186,8 +185,7 @@ offset
   },
 
   "checksums": {                   // 与 footer 字段一致（JSON 侧便于工具读取）
-    "rootfs_sha256": "…",
-    "seed_sha256": null
+    "rootfs_sha256": "…"
   }
 }
 ```
@@ -222,18 +220,17 @@ if footer.magic != "VMDIMG01" or footer.magic_tail != "VMDIMG01":
 if footer.file_size != size: reject("truncated")
 if footer.format_version > 1: reject("format too new, update app")
 if footer.footer_size != 4096: reject("bad footer")
-# ★ 合法 flags = bit0(SEED)|bit1(KERNEL)|bit2(INITRD)，掩码 0x7（R2 Blocker 修复）
-if footer.flags & ~0x7: reject("unknown flags")
+# ★ 合法 flags = bit0(KERNEL)|bit1(INITRD)，掩码 0x3（v1 无 seed；R2 Blocker 修复）
+if footer.flags & ~0x3: reject("unknown flags")
 # ★ flags ↔ 段一致性
-if (footer.flags & 0x1) != (footer.seed_size  > 0): reject("flags/seed mismatch")
-if (footer.flags & 0x2) != (footer.kernel_size > 0): reject("flags/kernel mismatch")
-if (footer.flags & 0x4) != (footer.initrd_size > 0): reject("flags/initrd mismatch")
+if (footer.flags & 0x1) != (footer.kernel_size > 0): reject("flags/kernel mismatch")
+if (footer.flags & 0x2) != (footer.initrd_size > 0): reject("flags/initrd mismatch")
 # ★ 边界/溢出校验：每段 [offset, offset+size) ⊆ [0, file_size-4096)
-for seg in [rootfs, seed(if bit0), kernel(if bit1), initrd(if bit2)]:
+for seg in [rootfs, kernel(if bit0), initrd(if bit1)]:
     if seg.offset > MAX-seg.size or seg.offset+seg.size > file_size-4096: reject("segment out of range")
-# 段序必须递增（无 seed 时该项为 0，不参与链式比较）
+# 段序必须递增（不存在的段 offset=0，不参与链式比较）
 require rootfs.offset == 0
-require seq_of_existing([seed, kernel, initrd, manifest]) offsets are strictly increasing
+require seq_of_existing([kernel, initrd, manifest]) offsets are strictly increasing
 if manifest_offset + manifest_size > file_size - 4096: reject("manifest out of range")
 read manifest at [manifest_offset, +manifest_size); sha256 == manifest_sha256?
 parse JSON -> require format == "vmdroid-system-image" else reject("非 VMDroid 镜像")
@@ -265,16 +262,17 @@ tools/mkimg.sh \
     --manifest manifest.json \
     --kernel  out/vmlinuz-virt \      # ★ R-16：写入 kernel payload
     --initrd  out/initrd.img \        # ★ R-16：写入 initrd payload
-    [--seed  seed.ext4] \
     -o out/debian.img
+# v1 无 --seed（决策 2026-10-08 移除）；恢复出厂见 DESIGN §4.3
 ```
 
 步骤：
 
-1. 读 `rootfs` 大小 `R`（取 `superblock.bytes_used`，**丢弃**尾部 4096 补齐字节），算 `rootfs_sha256`。
-2. 计算各段 1 MiB 对齐偏移；依次读取 seed?/kernel?/initrd? 并各算 sha256。
+1. 读 `rootfs` 大小 `R`（取 `superblock.bytes_used`，**丢弃**补齐至 4096 边界的尾部字节，
+   本例 `bytes_used`→文件尾 383 B；R1: B-R1-9），算 `rootfs_sha256`。
+2. 计算各段 1 MiB 对齐偏移；依次读取 kernel?/initrd? 并各算 sha256。
 3. 写 manifest JSON（UTF-8）→ 算 `manifest_sha256`。
-4. 顺序写出：`rootfs` → 填充 → `seed?` → 填充 → `kernel?` → 填充 → `initrd?`
+4. 顺序写出：`rootfs` → 填充 → `kernel?` → 填充 → `initrd?`
    → 填充 → `manifest` → 填充（4 KiB 对齐）→ `footer`。
 5. `fsync`；输出全文件 sha256 + 体积，供 catalog 使用。
 6. **自检**：① 同一解析器回读；② 若含 kernel/initrd → 自动跑 `pc-boot-smoke.sh`
@@ -302,8 +300,8 @@ tools/mkimg.sh \
 
 | 向量 | 期望 |
 |---|---|
-| 合法最小镜像（rootfs + manifest，无 seed） | 解析成功，payload 校验通过 |
-| 含 seed 的镜像 | `flags.bit0` 置位，seed 偏移/长度正确 |
+| 合法最小镜像（rootfs + manifest，无 kernel/initrd） | 解析成功，payload 校验通过，`flags == 0` |
+| 含 kernel+initrd 的镜像 | `flags == 0x3`；`kernel/initrd` 偏移 1 MiB 对齐、长度与 sha256 与源文件逐字节一致 |
 | 尾部 4 KiB 覆写 | `magic` 校验失败 → 拒绝 |
 | 文件截断 1 字节 | `footer.file_size != size` → 拒绝 |
 | manifest 单字节翻转 | `manifest_sha256` 不匹配 → 拒绝 |
@@ -312,7 +310,8 @@ tools/mkimg.sh \
 | 裸 squashfs | **拒绝**并提示封装（N4） |
 | `format_version = 2` | 拒绝并提示升级应用 |
 | `manifest_offset+manifest_size` 越界 / 偏移乱序 | 拒绝（B-R1-10 边界校验） |
-| `flags.bit1` 置位但 `kernel_size == 0` | 拒绝（flags 与段不一致） |
+| `flags.bit0` 置位但 `kernel_size == 0`（或 `bit1`/`initrd_size`） | 拒绝（flags 与段不一致） |
+| footer 偏移重编号回归：`manifest@72`、`kernel@124`、`initrd@172` | 逐字段断言（防 seed 移除后再错位，R2: RB-1 教训） |
 | kernel payload 单字节翻转 | `kernel_sha256` 不匹配 → 拒绝（R-16：坏内核不能上机） |
 | **PC 冒烟**：`qemu-system-aarch64` 用 `.img` 内 kernel/initrd 启动 | **90s** 内出现 `Ready!` + `ssh -p 9922` 可登录（R-16 主验收） |
 | `accounts.ssh_port = 2222` | 拒绝（违反 §4.8 端口规范） |
@@ -331,4 +330,5 @@ tools/mkimg.sh \
 | capabilities | §4.6 |
 | accounts（root + ltbkq，pw 123，SSH 22） | §4.8 |
 | 校验时机与 `.meta.json` | §6.4 |
-| 目录（catalog）字段 | §6.1（与本 manifest 字段一一对应） |
+| **无 seed / 恢复出厂 = 清零重建** | §4.3（决策 2026-10-08） |
+| 目录（catalog）字段 | §6.1（共用字段一一对应：`image_id↔image.id`、`identity`、`variant`、`version`、`system_version`、`arch`；`url/size/sha256/channel` 仅 catalog，`contract/capabilities/accounts/boot` 仅 manifest） |

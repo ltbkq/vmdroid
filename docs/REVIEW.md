@@ -94,6 +94,7 @@
 | R-14 | 应用内下载 + 手动导入 | DESIGN §6 | 两条路径都可安装镜像 |
 | R-15 | （评审补充）首次运行无镜像须引导且不启动死机 | DESIGN §7.4/§8.4 | 引导页出现且 VM 不进挂载失败态 |
 | R-16 | **`.img` 在 Linux PC 端可用 QEMU 正常启动** | DESIGN §11.4 + IMAGE-FORMAT §2/§3 | x86_64 Linux + `qemu-system-aarch64` 一条命令启动 → 90s 内 `Ready!` 且 ssh 可登录 |
+| R-17 | **强化虚拟机日志输出，便于排查纠偏** | DESIGN §16 | ①历史启动不被覆盖（`boots/` ≤10 条）②失败启动有 `meta.json`（`fail_stage`+`console_tail`）③镜像生命周期入 `image.log`（含 `activate.decision`）④导出 zip 无明文密码 ⑤journal 有 64MB 上限 |
 
 **本轮新需求（N1–N4，用户 2026-10-07 第 4 批）**
 

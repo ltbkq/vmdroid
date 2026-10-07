@@ -88,7 +88,7 @@ Guest 操作系统（`alpine-rootfs.squashfs`）全部打包进同一个 APK。
 【目标 · VMDroid 分离】
 ┌────────── VMDroid APK (~70 MB) ──────────┐      ┌─── 系统镜像 .img (≤150 MB) ──┐
 │ VM 引擎(QEMU/AVF) │ 内核+initrd │ UI      │      │ rootfs.squashfs (vdb, 只读)    │
-│ 桥接/终端/VNC/USB │ 镜像管理器(新增)       │ ───▶ │ + 可选 persist 种子 (vda 初始) │
+│ 桥接/终端/VNC/USB │ 镜像管理器(新增)       │ ───▶ │ + kernel/initrd payload (PC 启动) │
 │ 启动镜像选择控件   │                        │      │ + 自描述 manifest + 校验和      │
 └───────────────────────────────────────────┘      └────────────────────────────────┘
         │ 只复制内核/initrd(~20 MB)
@@ -116,12 +116,13 @@ Guest 操作系统（`alpine-rootfs.squashfs`）全部打包进同一个 APK。
 │     ├ SystemImageRepo    已安装镜像 + 当前激活镜像（DataStore）           │
 │     ├ ImageInstaller     SAF 导入 → 流式拷贝+sha256 → 激活               │
 │     ├ ImageDownloader    HTTP Range 断点续传 → 校验 → 激活               │
-│     ├ ImageCatalogRepo   目录(JSON)拉取/缓存/签名校验(可选)              │
-│     └ BootGuard          无镜像/损坏/需重置 时阻止启动并引导              │
+│     ├ ImageCatalogRepo   目录(JSON)拉取/缓存 + ECDSA 签名校验              │
+│     ├ BootGuard          无镜像/损坏/需重置 时阻止启动并引导              │
+│     └ VmdLog             ★ 启动轮转/boot_id/meta.json/image.log/导出(§16) │
 │  firmware/       vmlinuz-virt · initrd.img · qemu/   (APK 资产, 保留)     │
 └─────────────────────────────────────────────────────────────────────────┘
                       │ vdb = images/<id>.img   (只读, 零拷贝直挂)
-                      │ vda = storage.img       (可写, 应用创建/种子恢复)
+                      │ vda = storage.img       (可写, 应用创建/清零恢复出厂)
                       ▼
 ┌────────────── Guest（仍由 Podroid-Debian 构建，契约不变）────────────────┐
 │ init-podroid: vda→/mnt/persist(ext4)  vdb→/mnt/lower(squashfs)          │
@@ -135,8 +136,8 @@ Guest 操作系统（`alpine-rootfs.squashfs`）全部打包进同一个 APK。
 
 | 设备 | 文件 | 内容 | 所有者 | 生命周期 |
 |---|---|---|---|---|
-| `vda` | `filesDir/storage.img` | ext4，可写 overlay upper + `docker`/`containers`/`lxc` 绑定 | App 创建（sparse）或镜像种子恢复 | **跨镜像升级保留**；Reset VM / identity 变更时重建 |
-| `vdb` | `filesDir/images/<image_id>.img` | `.img` 文件（squashfs 起始，可尾随种子）；**仅 `.img` 格式**（N4） | 镜像管理器 | 随镜像安装/删除/激活变化 |
+| `vda` | `filesDir/storage.img` | ext4，可写 overlay upper + `docker`/`containers`/`lxc` 绑定 | App 创建（sparse）；**恢复出厂 = 清零重建**（guest `init-podroid` 自动 mkfs，§4.3） | **跨镜像升级保留**；Reset VM / identity 变更时重建 |
+| `vdb` | `filesDir/images/<image_id>.img` | `.img` 文件（squashfs 起始 + kernel/initrd + manifest/footer）；**仅 `.img` 格式**（N4） | 镜像管理器 | 随镜像安装/删除/激活变化 |
 | — | `filesDir/vmlinuz-virt`, `initrd.img`, `qemu/` | VM 固件 | APK 资产提取（3 项，不再有 rootfs） | 随 APK 升级 |
 
 **命名基线（R1: A-R1-6，全仓统一）**
@@ -158,6 +159,8 @@ filesDir/
 │   ├── debian-minimal-arm64.img.meta.json   # {sha256,size,mtime,verified_at,format_version}
 │   └── active.json                          # {image_id, identity, rootfs_sha256, activated_at}
 ├── storage.img                               # vda 用户数据盘
+├── boots/                                    # ★ 历史启动归档（meta.json + console.log，§16.2）
+├── image.log                                 # ★ 镜像生命周期 JSONL（§16.5）
 └── terminal.sock · ctrl.sock · serial.sock · qmp.sock · host.sock · console.log
 ```
 
@@ -205,7 +208,9 @@ VM 功能 **全部沿用**，只改"系统从哪来"这一件事。
    否则要么复制 300 MB（安装慢、双份占用），要么改 `init-podroid`（违反 G4）。
 2. **必须携带自描述元数据**（identity、版本、架构、契约版本、校验和），否则无法做
    升级/回滚/重置决策，也无法做完整性校验。
-3. **必须支持可选的 vda 初始种子**（工厂预置 ext4），用于"恢复出厂镜像"。
+3. **恢复出厂不得依赖镜像内数据**（决策 2026-10-08，移除 vda 种子）：
+   上游 `init-podroid` 对"全零 `storage.img`"会 `e2fsck` 失败 → `mkfs.ext4` 自动重建，
+   故应用只需**清零/重建 `storage.img`** 即可恢复出厂，`.img` 里不必带种子。
 4. **单文件、可断点、可流式校验**。
 5. **PC 端自包含可启动（R-16/G9）**：`.img` 内必须含 **kernel + initrd payload**，
    Linux PC 上 `qemu-system-aarch64` 一条命令启动到 `Ready!`，不依赖 APK/Android。
@@ -216,12 +221,12 @@ VM 功能 **全部沿用**，只改"系统从哪来"这一件事。
 ┌────────────────────── .img 文件（单文件） ──────────────────────┐
 │ 0x0                rootfs.squashfs (hsqs superblock 在 0x0)     │  ← 直接当 vdb 挂载
 │ ...squashfs 结束                                                 │
-│ [1 MiB 对齐]     persist 种子 ext4（可选，flags.bit0）            │  ← 恢复出厂时提取成 storage.img
-│ [1 MiB 对齐]     kernel payload（arm64 Image，flags.bit1）★R-16  │  ← PC 端 -kernel 直接用
-│ [1 MiB 对齐]     initrd payload（flags.bit2）★R-16               │  ← PC 端 -initrd 直接用
+│ [1 MiB 对齐]     kernel payload（arm64 Image，flags.bit0）★R-16  │  ← PC 端 -kernel 直接用
+│ [1 MiB 对齐]     initrd payload（flags.bit1）★R-16               │  ← PC 端 -initrd 直接用
 │ [1 MiB 对齐]     manifest JSON (UTF-8)                          │
 │ 末尾 4096 B      footer（magic + 各段偏移/长度/sha256）           │
 └─────────────────────────────────────────────────────────────────┘
+   无 persist 种子段（决策 2026-10-08，见 §4.3）；footer 字段偏移见 IMAGE-FORMAT §3
 ```
 
 **为什么可行**：squashfs 的 superblock 在文件 0x0，块表用绝对偏移，
@@ -230,18 +235,35 @@ VM 功能 **全部沿用**，只改"系统从哪来"这一件事。
 
 | 备选方案 | 结论 | 原因 |
 |---|---|---|
-| A. squashfs + 尾随段（选定） | ✅ | 零拷贝直挂；同时能携带种子与元数据；无需改 initramfs |
+| A. squashfs + 尾随段（选定） | ✅ | 零拷贝直挂；能携带元数据与 kernel/initrd；无需改 initramfs |
 | B. 容器格式，安装时拆成两个文件 | ⚠️ 备用 | 需在安装时多写 ~300 MB、峰值双份占用；**作为 A 的降级路径保留**（见 §4.3） |
 | C. GPT 分区裸盘（p1=ext4, p2=squashfs） | ❌ | `init-podroid` 直接 `mount /dev/vdb`，不认分区；改它违反 G4 |
 | D. QEMU `-blockdev` slice（offset/size） | ⚠️ 后续优化 | QEMU 可行但 AVF/crosvm 无对应能力，两后端会不对称 |
 | E. `.img` 就是裸 squashfs（无 footer） | ❌ **不支持** | 无 manifest 则无 identity/版本/校验，无法做升级与重置决策（**需求 N4：只收 `.img`**）；现有 `.squashfs` 产物须经 `mkimg.sh` 封装 |
+| F. `.img` 内带 vda 种子（ext4 payload） | ❌ **v1 移除**（决策 2026-10-08） | 见 §4.3：上游 initrd 已能对全零盘自动 mkfs，种子无增量价值 |
 
 ### 4.3 两种消费模式（+ 一条降级分支）
 
 | 模式 | 触发条件 | 行为 |
 |---|---|---|
 | **direct**（默认，首选） | 文件是合法 `.img`（footer 校验通过） | **原地挂载**，零额外写入；`rootfs` 段始终留在 `.img` 内 |
-| **restore-seed**（恢复出厂） | 用户点"恢复出厂" | 只提取 **persist 种子** → `storage.img`（**稀疏写出**：跳过全零 run，避免实心文件，R1: B-R1-18）；`rootfs` 仍在 `.img` 内直挂 |
+| **factory-reset**（恢复出厂） | 用户点"恢复出厂" | **把 `storage.img` 清零/重建（sparse）** → 下次开机由 `init-podroid` 自动 `mkfs.ext4`；`rootfs` 仍在 `.img` 内直挂 |
+
+> **恢复出厂为何不需要种子（决策 2026-10-08，R2: RM-24 关闭）**：
+> 上游 `ExTV/Podroid@ce01218` 的 `init-podroid` 已内置首启格式化逻辑 ——
+> `mount ext4` 失败 → `e2fsck` → **当盘首 1 MiB 全零且 e2fsck rc ≥ 8 时执行
+> `mkfs.ext4 -F /dev/vda`**（源码注释："Never reformat a disk e2fsck could
+> read: only a brand-new, all-zero storage.img (first boot) gets mkfs"），
+> 随后 `resize2fs`。因此：
+>
+> - **应用侧动作**：删旧文件 → `truncate` 同尺寸 sparse 空文件（或直接重建），
+>   **不需要**任何镜像内数据；下一 boot guest 自己格式化。
+> - **顺带关闭 R1: B-R1-18**（种子稀疏提取）与 **B-R2-21**（mkfs/resize2fs 位置
+>   已确认在 initramfs 的 `init-podroid` 内，非 guest rootfs）。
+> - **代价**：恢复出厂后 guest 需要一次完整首启（约 30–60s），比"直接换种子盘"
+>   慢几秒 —— 用户无感知，且省掉每镜像 100MB+ 的种子体积。
+> - **注意**：清零必须**真清零首个 1 MiB**（`truncate` 到 0 再 `ftruncate` 回尺寸，
+>   或重建），否则 e2fsck 可能读到旧 superblock → 走修复分支而非 mkfs。
 
 > **N4 约束**：启动镜像**只支持 `.img` 格式**。无 footer 的裸 `.squashfs`、
 > `.tar*`、其他项目镜像**一律拒绝**并提示用 `mkimg.sh` 封装。
@@ -259,7 +281,7 @@ spike 失败（某后端不接受尾随数据）
 ```
 
 `fallback-split` **不改变格式与导入白名单**（输入仍是 `.img`），只改安装后的落盘形态。
-恢复出厂与降级分支互不相干（前者只提种子）。
+恢复出厂（清零重建）与降级分支互不相干，两者只在"direct 是否可用"上有关联。
 
 ### 4.4 版本与兼容协商
 
@@ -560,7 +582,6 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 {
   "schema": 1,
   "generated_at": "2026-10-07T12:00:00Z",
-  "publisher": { "name": "Podroid-Debian", "ed25519_key": "base64..." },
   "images": [
     {
       "image_id": "debian-minimal-arm64",
@@ -590,9 +611,20 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 > 上例为合法可构造值，实际以 `mkimg` 实算为准（JSON 示例**不得**使用数字下划线，R2: A-R2-15）。
 > `app_min_version_code` 与 manifest 内 `app.min_version_code` **同义**（catalog 扁平 / manifest 嵌套）。
 
-- **信任模型 v1**：HTTPS + 目录内 `sha256`（下载后再校验一遍，防 CDN/传输篡改需目录签名）。
-- **信任模型 v2（M7）**：`publisher.ed25519_key` 内置 APK，对目录 JSON 做
-  Ed25519 detached signature（minisign 风格），签名不对则拒绝加载目录。
+- **签名（决策 2026-10-08，R2: RM-21 关闭）**：**ECDSA P-256 + SHA-256**
+  （`SHA256withECDSA`），Android 系统 `Signature` **API 11+ 即支持，零依赖**
+  （Ed25519 需 API 33 > minSdk 26，故不采用；R2 事实核查结论）。
+  - **公钥内置 APK**（`BuildConfig.CATALOG_PUBKEY` 或 `res/raw/catalog_pub.pem`），
+    **绝不放进被签内容**（原设计把 `ed25519_key` 写进 catalog 本身 = 自签失效）。
+  - **签名对象**：`catalog.json` 的**原始字节**（不做 JSON 规范化重排 —— 规范化
+    是签名兼容性的经典坑，签什么就验什么）。
+  - **签名文件**：`catalog.json.sig`，detached，`base64(DER(ECDSA-Signature))`，
+    与 `catalog.json` 同 Release 发布（minisign 风格，工具：`openssl dgst -sha256 -sign`）。
+  - **校验失败** → 拒绝加载目录，UI 报"镜像目录签名无效"（不降级为裸 HTTPS，
+    否则签名形同虚设）；**公钥轮换** = 发新 APK（附带更新内置公钥），v1 不做
+    多密钥列表，列入 Q6。
+  - **HTTPS 仍是第一道防线**（TLS 证书链）；签名校验是防"Release 资产被替换/
+    镜像站篡改"的第二道独立防线（防的是**内容**而非传输）。
 
 ### 6.2 下载（断点续传）
 
@@ -661,7 +693,7 @@ args += "-drive"; args += "file=${rootfsImg},if=none,id=drive2,format=raw,readon
 |---|---|
 | `QemuEngine.kt:575` | 硬编码文件名 → `systemImageRepo.activeRootfsPath()` |
 | `QemuEngine.kt:576` | `if (exists)` 静默跳过 → **无镜像直接 fail fast**（现状会启动一台 `init-podroid` 挂载失败的死机） |
-| `QemuEngine.kt:558-573` | `storage.img` 逻辑 **不变**（种子恢复在镜像管理器里做，不进引擎） |
+| `QemuEngine.kt:558-573` | `storage.img` 逻辑 **不变**（恢复出厂=清零在镜像管理器里做，不进引擎） |
 | `QemuEngine.kt:532-533, 552-556` | 内核/initrd **不变**（仍来自 APK 资产） |
 | `QemuEngine.kt:537-547` | cmdline 不变（`console=ttyAMA0`、`podroid.*`）；可选追加 `podroid.image_identity=`（§5.2） |
 | `QemuEngine.kt:585-621` | 9p 下载共享、SLIRP 端口转发 **不变** |
@@ -813,7 +845,7 @@ setup ──▶ home ──┬─▶ terminal
 │ debian-minimal-arm64 · 148 MB              │  ← ②image_id · 体积
 │ debian:trixie · system_version 34          │  ← ②版本信息
 │ ● 使用中                                   │  ← ③状态（颜色+图标+文字三重编码）
-│ [立即校验] [恢复出厂(用种子)] [移除]         │  ← ④操作（无 FilledButton：卡片内均 TextButton）
+│ [立即校验] [恢复出厂] [移除]                  │  ← ④操作（无 FilledButton：卡片内均 TextButton）
 │                                            │
 │ Debian 13 (trixie) · 桌面版                 │
 │ debian-desktop-arm64 · 312 MB              │
@@ -876,6 +908,22 @@ Home / Terminal / X11 / Settings / 端口转发 / 备份 **沿用上游**，
 仅增加 §8.2 的启动镜像选择控件、§8.3 系统镜像入口与无镜像态提示；
 所有改动须符合 §8.0 六条设计原则（R2 起作为评审验收基准）。
 
+**新增：Settings → 诊断（§16.4）**
+
+```
+┌─ 诊断 ────────────────────────────────────┐
+│ 最近启动                                    │
+│ ● 10-08 14:22  12.0s  成功 (Ready)         │
+│ ○ 10-08 13:51  90s    失败 @ Network found │  ← 失败条目置顶+error色
+│ ○ 10-07 22:04  11.4s  成功                 │
+│                                            │
+│ 磁盘：boots 12 MB / image.log 1.2 MB       │
+│ [导出诊断包]              [清空历史]        │  ← 单 FilledButton
+└────────────────────────────────────────────┘
+```
+
+点击启动条目 → 展开 `meta.json` 关键字段 + `console.log` 末尾 4 KB。
+
 ---
 
 ## 9. 关键时序
@@ -884,7 +932,7 @@ Home / Terminal / X11 / Settings / 端口转发 / 备份 **沿用上游**，
 
 ```
 User → ImageManager: 下载 Debian
-CatalogRepo → HTTPS GET catalog.json → 结构/sha256 校验（v2 起含 Ed25519 签名）→ 展示列表
+CatalogRepo → HTTPS GET catalog.json + catalog.json.sig → **ECDSA P-256 签名校验**（无效即拒载）→ 结构/sha256 字段校验 → 展示列表
 ImageDownloader:
    预检空间 → GET .part(0-) → [写盘 + sha256]n 块 → 完成
    → sha256 比对 → fsync → rename → meta.json → INSTALLED
@@ -920,7 +968,7 @@ VMDroid: APK 升级 → 只重拷 ~20 MB 固件；镜像 .img 不动 → 秒级�
 | # | 措施 | 说明 |
 |---|---|---|
 | S1 | 全量 sha256 校验 | 下载与导入都必须校验；`.meta.json` 记录，启动前比对 size/mtime |
-| S2 | TLS + 目录签名 | v1 HTTPS+sha256；v2 目录 Ed25519 签名（公钥内置） |
+| S2 | TLS + 目录签名 | HTTPS（传输）+ **`catalog.json.sig` = ECDSA P-256/SHA-256 detached 签名，公钥内置 APK**（内容），签名无效即拒绝加载目录（§6.1） |
 | S3 | 原子落盘 | `.part` → fsync → rename，断电不会留下"看起来完整"的镜像 |
 | S4 | 应用私有目录 | `.img` 存于 `filesDir/images/`，受 Android FBE 保护，其他应用不可读 |
 | S5 | 空间预检 | 下载/导入前检查，避免半成品占位 |
@@ -988,15 +1036,14 @@ VMDroid 应用侧配套（M7）：
 |---|---|---|
 | `ltbkq/vmdroid`（本仓库） | VM 应用 + 镜像管理 | `vmdroid-<ver>.apk`（≈70 MB）、`VmdImageCodec`（解析/校验，**应用不写 `.img`**）、`tools/pc-run.sh`（用户入口，随 Release 分发） |
 | `ltbkq/Podroid-Debian` | 构建 Guest rootfs、**固件**、打包 `.img` | `debian.img`、`catalog.json`、`vmlinuz-virt`/`initrd.img` Release 资产（§12.4）、`mkimg.sh`、`catalog.sh`、`pc-boot-smoke.sh`、首启 host key 逻辑 |
-| `ExTV/Podroid` | 上游 VM 功能 + 内核构建脚本 | fork 源头；`build-all.sh kernel\|initramfs\|qemu` |
+| `ExTV/Podroid` | 上游 VM 功能 + 内核构建脚本 | fork 源头；`build-all.sh kernel / initramfs / qemu` |
 
 `Podroid-Debian` 侧需要新增（不改现有流水线）：
 
 ```sh
 tools/mkimg.sh --rootfs out/debian-rootfs.squashfs \
                --manifest manifest.json \
-               [--seed seed.ext4] \
-               -o out/debian.img              # 发布名 debian.img（命名基线见 §2.3）
+               -o out/debian.img              # 发布名 debian.img（命名基线见 §2.3；v1 无 --seed）
 tools/catalog.sh ... > catalog.json           # 生成目录
 tools/boot-test.sh ${PKG:-io.github.ltbkq.vmdroid.debug}   # 冒烟（R1: B-R1-8 参数化）
 ```
@@ -1041,16 +1088,17 @@ tools/pc-run.sh debian.img
 # 方式 B：手工（等价命令，用于文档自证）
 #  1) vda 必须先格式化，否则 QEMU 建 0 字节文件 → init-podroid 挂载失败（R2: B-R2-16）
 truncate -s 4G storage.img && mkfs.ext4 -F storage.img
-#  2) 按 footer 偏移提取（172=kernel_offset, 220=initrd_offset；须校验双魔数 + sha256）
+#  2) 按 footer 偏移提取（★ 偏移随 seed 移除重编号：flags@120, kernel@124, initrd@172）
 python3 - <<'EOF'
-import struct, hashlib, sys
+import struct, hashlib, sys, os
 img = open("debian.img","rb"); img.seek(-4096, 2); ft = img.read(4096)
 assert ft[0:8] == b"VMDIMG01" and ft[4088:4096] == b"VMDIMG01", "bad footer"
 size, = struct.unpack_from("<Q", ft, 16)
-import os; assert size == os.path.getsize("debian.img"), "truncated"
-flags, = struct.unpack_from("<I", ft, 168); assert flags & 0x6 == 0x6, "no kernel/initrd"
-for off, ln, sha, name in ((172,180,188,"vmlinuz"), (220,228,236,"initrd.img")):
+assert size == os.path.getsize("debian.img"), "truncated"
+flags, = struct.unpack_from("<I", ft, 120); assert flags & 0x3 == 0x3, "no kernel/initrd"
+for off, sha, name in ((124,140,"vmlinuz"), (172,188,"initrd.img")):
     o, s = struct.unpack_from("<QQ", ft, off); h = ft[sha:sha+32]
+    assert o and s and o + s <= size - 4096, f"{name} out of range"
     img.seek(o); data = img.read(s)
     assert hashlib.sha256(data).digest() == h, f"{name} sha256 mismatch"
     open(name, "wb").write(data)
@@ -1076,7 +1124,7 @@ qemu-system-aarch64 \
 | 项 | 说明 |
 |---|---|
 | 内核来源 | **`.img` 自带**（footer `kernel_*`）；与 APK 内置者同源同版本，产物流水线见 §12.4 |
-| `vda` | 脚本首次 `truncate -s 4G + mkfs.ext4` 创建 `storage.img`（**不用** seed，seed 只给 Android 恢复出厂）；已存在则复用 |
+| `vda` | 脚本首次 `truncate -s 4G + mkfs.ext4` 创建 `storage.img`（已存在则复用）；恢复出厂同样交给 `init-podroid` 自动 mkfs（§4.3） |
 | 串口/显示 | `-display none -serial mon:stdio` 为**必选项**（R2: B-R2-7）：`ttyAMA0` 不接 chardev 则 `Ready!` 无输出，无头机缺显示后端会直接退出 |
 | hvc0–2 | 上游 `-device virtio-serial-pci` + 三个 `virtconsole` 才有 `/dev/hvc0-2`。**PC 端默认补上**（脚本负责），否则 `podroid-getty@hvc0` 会无限重启空烧 vCPU（R2: B-R2-8）。控制台验收仍走 `ttyAMA0`（serial） |
 | 启动契约 | 挂载与标记路径**相同**：`init-podroid` 挂 `vda`/`vdb` → overlay → `Ready!` |
@@ -1171,6 +1219,8 @@ qemu-system-aarch64 \
 | 最小化负面断言 | dpkg **不含** `docker.io/podman/lxc/xfce4/lightdm`；包数 **≤260**（目标 210–250）；`.img ≤ 150 MB` | Podroid-Debian CI |
 | 契约指纹 | `.img` 内 `/usr/local/lib/podroid/*`、`podroid-*`、控制台标记串清单比对（防契约漂移） | Podroid-Debian CI |
 | 回归（沿用） | `Podroid-Debian/tests/test_dns.sh`、`tools/boot-test.sh`（轮询 `Ready!`；**参数化 `PKG=${1:-io.github.ltbkq.vmdroid.debug}` 并自建 `adb forward tcp:9922 tcp:9922`**，R1: B-R1-8） | Podroid-Debian |
+| **日志与诊断（§16）** | 轮转/`boot_id`/`meta.json` 序列化单测；`image.log` JSONL 逐行可解析；超时 90s 写 `fail_stage`；导出 zip 含全部条目且 **grep 明文密码 = 0** | vmdroid |
+| **UI 基线（§8.0）** | `lintHardcodedText` 零告警；`values-en` 覆盖率 ≥ `values/`；每页四态 checklist 文档路径 | vmdroid |
 
 ### 13.2 真机冒烟矩阵
 
@@ -1187,13 +1237,14 @@ qemu-system-aarch64 \
 | 损坏镜像（`dd conv=notrunc` 改 1 字节，mtime 变）→ 启动前置重算 → `CORRUPT` 拒绝启动 | ✅ | ✅ |
 | 同 identity 升级 → 数据保留 | ✅ | ✅ |
 | 换 identity → 强制重置 → 正常启动 | ✅ | ✅ |
-| **恢复出厂**：从 `.img` 尾部**稀疏**提取种子 → `storage.img` → `Ready!` 且持久数据回到种子状态 | ✅ | ✅ |
+| **恢复出厂**：清零重建 `storage.img` → 开机由 `init-podroid` 自动 `mkfs.ext4` → `Ready!` 且持久数据回到全新状态 | ✅ | ✅ |
 | APK 升级后镜像**不被**重拷（耗时 <5s） | ✅ | ✅ |
 | **SSH 双账户登录（guest 端口 22，宿主 9922）**：`ssh root@localhost -p 9922` 与 `ssh ltbkq@localhost -p 9922`（密码 `123`）均成功；guest 内 `ss -tln` 断言 `:22` | ✅ | ✅ |
 | `ltbkq` 免密 sudo 可用（`sudo -n true`） | ✅ | ✅ |
 | `debian.img`（Xvnc 有、容器无）→ 容器能力降级不报错；X11 连 `:5900` 成功 | ✅ | ✅ |
 | **启动镜像选择控件（§8.2）**：运行中禁用 / 空态双入口 / `CORRUPT` 项标红 / 切换后下次启动生效 | ✅ | ✅ |
-| **UI 设计原则（§8.0 逐条）** | 双主题 / 间距序列 / 四态 + 错误态可执行文案 / 卡片顺序与唯一 FilledButton（截图评审）/ 破坏性二次确认 / `lintHardcodedText` 零告警 | ✅ | ✅ |
+| **日志诊断（§16）**：连续 10 次启动 → `boots/` 不超 10 条且**历史不丢**；喂损坏镜像 → `meta.json` 有 `result=timeout`+`fail_stage`+`console_tail`；触发重置 → `image.log` 有 `activate.decision=identity` | ✅ | ✅ |
+| **UI §8.0 抽查**：双主题 / 间距序列 / 四态 + 错误态可执行文案 / 唯一 FilledButton / 破坏性二次确认（截图评审） | ✅ | ✅ |
 | **R-16 PC 启动**：`tools/pc-run.sh debian.img`（x86_64 Linux, TCG）→ **90s** 内 `Ready!`，`ssh -p 9922 ltbkq@127.0.0.1`（pw `123`）成功 | ✅ 必测 | n/a（PC 用例） |
 | 终端 / VNC / 端口转发 / host bridge / USB | ✅ | ✅（USB QEMU 专属） |
 
@@ -1215,15 +1266,15 @@ qemu-system-aarch64 \
 | 阶段 | 内容 | 退出标准 | 预估 |
 |---|---|---|---|
 | **M0** 规格冻结 | 本设计评审（R1–R3）+ P0 spike（§13.3）+ B-R1-17 占用决策 | spike 结论：direct 可行 / 需 extract 及其占用方案 | 1–2 天 |
-| **M1** 骨架 | fork 上游 → 改名/包名/品牌 → 移除 rootfs 资产 → §8.0 设计系统落点（主题/token/间距常量 + **Home 页四态**；全站四态审计归 M6） | APK ≈70 MB 可安装；`images/` 为空时进 Setup 占位 + 启动按钮隐藏（**BootGuard 简版：仅 ABSENT 判定**，完整校验归 M3，R2: D-R2-4） | 3 天 |
-| **M2** 格式与工具 | **vmdroid**：`VmdImageCodec` + 测试向量消费；**Podroid-Debian**：`mkimg.sh`（`--kernel/--initrd`）、`manifest.json`、**`packages-minimal.list` + 首个 `out/debian.img`**、账户规范（§4.8 含 host key 首启生成）、`pc-run.sh`/`pc-boot-smoke.sh`、`graft.sh` 废除、`boot-test.sh` 参数化 | 互操作测试通过；**R-16 PC 冒烟 `Ready!` + ssh**；镜像 ≤150 MB、包数 ≤260、负面断言通过 | 4–5 天（R2: D-R2-3/D-R2-14 建议拆 M2a/M2b） |
-| **M3** 镜像管理 | 导入/校验/激活/删除/BootGuard/identity 判据 + **§8.2 启动镜像选择控件** | §13.2 中"导入/E2E 换系统/损坏/identity"用例通过 | 3–4 天 |
-| **M4** 下载 | 目录 + 断点续传 + 通知进度 + §8.3 镜像页 | 60% 杀进程续传用例通过 | 2–3 天 |
-| **M5** 恢复出厂 | **稀疏**种子提取应用到 `storage.img` | Reset 与"用种子恢复"行为正确 | 1–2 天 |
-| **M6** 回归 | 真机双后端矩阵 + 契约指纹回归 + guest identity 守卫（可选） | §13.2 全绿 | 2–3 天 |
-| **M7** 发布 | CI、签名、Release、catalog、目录 Ed25519 签名、SSH 收紧、文档、license 合规 | 首个公开版本 | 2 天 |
+| **M1** 骨架 | fork 上游 → 改名/包名/品牌 → 移除 rootfs 资产 → §8.0 设计系统落点（主题/token/间距常量 + **Home 页四态**；全站四态审计归 M6）→ **§16 基础日志**（`VmdLog`：启动前轮转 `boots/` + `boot_id` + 阶段打点 + `meta.json`，L1/L2 修复） | APK ≈70 MB 可安装；`images/` 为空时进 Setup 占位 + 启动按钮隐藏（**BootGuard 简版：仅 ABSENT 判定**，完整校验归 M3，R2: D-R2-4）；**连续 2 次启动历史不丢** | 3–4 天 |
+| **M2** 格式与工具 | **vmdroid**：`VmdImageCodec` + 测试向量消费；**Podroid-Debian**：`mkimg.sh`（`--kernel/--initrd`）、`manifest.json`、**`packages-minimal.list` + 首个 `out/debian.img`**、账户规范（§4.8 含 host key 首启生成）、`pc-run.sh`/`pc-boot-smoke.sh`、`graft.sh` 废除、`boot-test.sh` 参数化、**journald 64MB 限额 drop-in（§16.6）** | 互操作测试通过；**R-16 PC 冒烟 `Ready!` + ssh**；镜像 ≤150 MB、包数 ≤260、负面断言通过 | 4–5 天（R2: D-R2-3/D-R2-14 建议拆 M2a/M2b） |
+| **M3** 镜像管理 | 导入/校验/激活/删除/BootGuard/identity 判据 + **§8.2 启动镜像选择控件** + **`image.log`（§16.5，L3 修复）** | §13.2 中"导入/E2E 换系统/损坏/identity"用例通过 + `activate.decision` 有记录 | 3–4 天 |
+| **M4** 下载 | 目录 + 断点续传 + 通知进度 + §8.3 镜像页 + 下载事件入 `image.log` | 60% 杀进程续传用例通过 | 2–3 天 |
+| **M5** 恢复出厂 | **清零重建** `storage.img`（guest 自动 mkfs，§4.3）；无需种子提取 | Reset 与"恢复出厂"行为正确、全零盘首启格式化成功 | 1 天 |
+| **M6** 回归 | 真机双后端矩阵 + 契约指纹回归 + guest identity 守卫（可选）+ **诊断 UI + 导出 zip 扩展（§16.4/§16.8）** + 全站四态审计 | §13.2 全绿（含 §16 日志用例） | 3 天 |
+| **M7** 发布 | CI、签名、Release、catalog + `catalog.json.sig`（ECDSA P-256）、公钥内置 APK、SSH 收紧、文档、license 合规 | 首个公开版本；**签名无效用例拒载通过** | 2 天 |
 
-**合计 17–22 个工作日 ≈ 3.5–4.5 周**（不含 AVF 真机排期依赖；M2 另有拆分意见见 R2: D-R2-14）。
+**合计 19–25 个工作日 ≈ 4–5 周**（不含 AVF 真机排期依赖；M2 另有拆分意见见 R2: D-R2-14）。
 
 ---
 
@@ -1236,10 +1287,184 @@ qemu-system-aarch64 \
 | Q3 | 外部路径直挂（不拷贝到私有目录）是否可行？ | 需验证 scoped storage 下 QEMU/crosvm 打开 `/storage/emulated/0/...` 的能力与性能 |
 | Q4 | 已安装镜像数量上限 / 存储配额策略 | 建议 2 个，超出提示删除 |
 | Q5 | 启动失败自动回滚（A/B） | v1 不做；先做"手动回滚到另一已装镜像" |
-| Q6 | 目录签名（Ed25519）何时启用 | M7 内完成，公钥内置 |
+| Q6 | 目录签名公钥轮换策略 | **已决（2026-10-08）**：算法 = ECDSA P-256 + SHA-256，公钥内置 APK、detached `.sig` 覆盖原始字节（§6.1）；轮换 = 发新 APK，v1 不做多密钥列表 |
 | Q7 | 包名是否沿用 `com.excp.podroid`（便于未来原地升级） | 当前建议新包名；若预期与上游合并需重新讨论 |
 | Q8 | `.img` 是否需要加密（Android FBE 已保护私有目录） | 暂不额外加密 |
 | Q9 | root 密码 `123` 是否强制首启改密 | **已决**：不强制（§4.8 规定 `root/123` + `ltbkq/123` 为镜像规范），改由回环转发 + Settings 修改入口保证安全 |
+
+---
+
+## 16. 日志与诊断（排查纠偏）
+
+> **目标**：任何一次启动失败/镜像异常，事后都能从日志**定位到原因与阶段**，
+> 不需要复现。三条原则：①**历史可追溯**（不覆盖上次）②**结构化可 grep**
+> ③**一键导出**（继承上游 Export Log）。
+
+### 16.1 现状问题（实测，2026-10-08）
+
+| # | 问题 | 证据 |
+|---|---|---|
+| L1 | **`console.log` 每次启动被覆盖**，上一次启动为什么失败无从查起 | 上游 `QemuBootMonitor.kt:88` `FileOutputStream(consoleLog, false)` = truncate 模式 |
+| L2 | 启动阶段**无耗时记录**，无法判断"卡在哪个阶段/慢了多少" | `BootStageDetector` 只设 `bootStage` flow，不打时间戳 |
+| L3 | 镜像生命周期（下载/校验/激活/重置）**完全无日志** | 本设计 §5–§6 未定义任何日志 |
+| L4 | guest journal **无容量上限**，长期运行撑大 `storage.img` | 实测 `/var/log/journal` 存在（持久化）但无 `SystemMaxUse` |
+| L5 | 启动失败时**无结构化失败原因**（只有原始控制台流） | 无 `boot.meta.json` 概念 |
+
+### 16.2 日志文件布局（`filesDir/`）
+
+```
+filesDir/
+├── console.log                # ★ 契约路径不变（boot-test.sh 依赖）= 最近一次启动
+├── boots/                     # ★ 新增：历史启动归档（启动前轮转，L1 修复）
+│   ├── 20261008T142231-a1b2c3.console.log
+│   ├── 20261008T142231-a1b2c3.meta.json
+│   └── …                      # 保留最近 10 次或 50 MB（LRU 删除）
+├── image.log                  # ★ 新增：镜像生命周期 JSONL（滚动 3×2 MB）
+└── log.txt                    # 导出产物（上游既有，§16.8）
+```
+
+**轮转时机**：`VmdroidService.start()` **在引擎启动前**（`BootGuard` 通过后）把
+既有 `console.log` 重命名为 `boots/<bootId>.console.log` —— 引擎自身无需改动
+（它仍以 truncate 模式新建 `console.log`，语义正好是"本次启动"）。
+
+### 16.3 boot_id 与结构化格式
+
+- `boot_id` = `yyyyMMddTHHmmss-<6hex>`，启动前生成，写入 meta.json 与所有日志行。
+- `console.log` 保持**原始字节流不加前缀**（契约：`BootStageDetector` 靠子串匹配，
+  不能污染）；时间戳只进 `meta.json` 与 `image.log`。
+- `image.log` 每行一个 JSON（JSONL）：
+  ```jsonc
+  {"ts":"2026-10-08T14:22:31.412+08:00","boot":"…a1b2c3","ev":"verify_ok",
+   "image":"debian-minimal-arm64","sha256":"ab12…","src":"download","dur_ms":4120}
+  ```
+
+### 16.4 启动阶段时间线（L2/L5 修复）
+
+`BootStageDetector` 命中每个 marker 时追加打点（**只加时间戳，marker 字符串与判定逻辑不动**，
+不违反 G4/§3 契约）。`stages[].name` 直接复用上游 `BootStageDetector.MARKERS`
+的 8 个标签（实测自 `ExTV/Podroid@ce01218`），不新造词汇，避免与 UI 阶段文案漂移：
+
+```jsonc
+// boots/<boot_id>.meta.json
+{
+  "boot_id": "20261008T142231-a1b2c3",
+  "started_at": "…", "finished_at": "…",
+  "backend": "qemu", "image": "debian-minimal-arm64", "image_sha256": "ab12…",
+  "app_version": "1.0.0", "system_version": 34,
+  // stages[].name 用上游 BootStageDetector.MARKERS 的标签（8 个，逐一对应）：
+  // "Booting kernel..." / "Mounting storage..." / "Loading kernel modules..."
+  // / "Network found" / "Configuring containers..." / "Starting SSH..."
+  // / "Almost ready..." / "Ready"
+  "stages": [ {"name":"Booting kernel...",        "t_ms":0},
+              {"name":"Mounting storage...",      "t_ms":1840},
+              {"name":"Loading kernel modules...","t_ms":2010},
+              {"name":"Network found",            "t_ms":6420},
+              {"name":"Starting SSH...",          "t_ms":11850},
+              {"name":"Almost ready...",          "t_ms":11902},
+              {"name":"Ready",                    "t_ms":12044} ],
+  "result": "ready",           // ready | failed | timeout | killed
+  "fail_stage": null,          // failed/timeout 时 = stages[].name 最后一项
+  "console_tail_b64": null     // failed/timeout 时 = 末尾 4 KB（gzip+base64）
+}
+```
+
+- **超时判定**：90s（与 §13.2 `BOOT_TIMEOUT` 同源）未见 `Ready!` → `result=timeout`，
+  记录 `fail_stage` + `console_tail_b64` —— 这是"起不来"的核心证据。
+- **UI**：Settings → 诊断 列表展示最近启动（耗时 / 结果 / 失败阶段），
+  点击可看 `console.log` 尾部；**启动失败时自动置顶该条**。
+
+### 16.5 镜像生命周期日志（L3 修复）
+
+`image.log` 记录以下事件（每条含 `ts`/`image`/`src`/`dur_ms`）：
+
+| 事件 | 触发点 | 关键字段 |
+|---|---|---|
+| `download_start` / `download_progress` / `download_done` / `download_fail` | §6.2 | `bytes`、`resume`（是否续传）、`err` |
+| `import_start` / `import_done` / `import_fail` | §6.3 | `src_uri`、`bytes`、`err` |
+| `verify_ok` / `verify_fail` | §6.4 | `sha256`、`fail`（footer/manifest/段 sha 之一） |
+| `activate` | §5.3 | `from`、`to`、`decision`（`same`/`identity`/`contract`/`init`）、`reset`（bool） |
+| `factory_reset` | §4.3 | `old_size`、`new_size` |
+| `install_delete` | §5.3 | `image` |
+| `bootguard_reject` | §7.4 | `reason`（`NO_IMAGE`/`CORRUPT`/`APP_TOO_OLD`/`ARCH`/`SSH_PORT`/…） |
+
+**这组日志直接回答"换镜像后为什么起不来/为什么要求重置"** —— 每次 `RESET_REQUIRED`
+必须留下 `activate.decision` 记录。
+
+### 16.6 guest 侧日志（L4 修复）
+
+- journal **已持久化**（`/var/log/journal`，写入走 overlay → `storage.img`）→ 跨重启可查，
+  但**必须加上限**，由 `Podroid-Debian` 镜像内新增 drop-in：
+  ```
+  # /etc/systemd/journald.conf.d/vmdroid.conf  （镜像内容，不违反 G4）
+  [Journal]
+  SystemMaxUse=64M
+  MaxRetentionSec=1month
+  ```
+- **获取路径（v1）**：`ssh -p 9922 ltbkq@127.0.0.1 'journalctl -b -1 -p err --no-pager'`
+  （文档提供命令；应用内一键收集见 §16.9 开放项）。
+- guest 侧单元日志落点**沿用上游**：契约单元 `StandardOutput=journal+console`
+  （同时进 `console.log`），非契约单元仅 journal。
+
+### 16.7 日志级别
+
+| 级别 | 内容 | 默认 |
+|---|---|---|
+| `info` | 上述结构化事件 + `logcat` info | ✅ |
+| `verbose` | QEMU 命令行全文、QMP 交互、镜像校验逐段结果 | ❌（Settings 开关，复用上游 `avfVerboseLogging` 语义泛化） |
+
+- verbose 时 QEMU 完整命令行（含所有 `-drive`/`-device` 参数）写入 `meta.json.qemu_argv` ——
+  排查"参数拼错"类问题的关键证据。
+
+### 16.8 一键导出（继承上游 + 扩展）
+
+上游 Settings → Diagnostics → **Export Log**（`SettingsViewModel.exportConsoleLogs()`，
+构建 `log.txt` = 诊断头 + 引擎诊断 + 本进程 logcat + `console.log`，分享出去）——
+**保留并扩展**为导出包（zip）：
+
+```
+vmdroid-diag-<ts>.zip
+├── log.txt                 # 上游格式（诊断头 + logcat + 最近 console）
+├── boots/ 最近 3 次 *.meta.json + *.console.log 尾部 64 KB
+├── image.log               # 全量（≤6 MB）
+├── active.json · <image>.img.meta.json   # 镜像状态
+└── device.txt              # 机型/Android 版本/后端/权限（AVF 探测，沿用 AvfDiagnostics）
+```
+
+- **脱敏**：`accounts[].password`、下载 URL 中的 token 查询参数在导出前替换为 `***`。
+- **release 包不可 `run-as`**（上游已知事实）→ 导出是唯一主路径，必须可用。
+
+### 16.9 配额与轮转（硬上限）
+
+| 对象 | 上限 | 超限行为 |
+|---|---|---|
+| 单次 `console.log` | 8 MB | 截断**头部**保留尾部（失败信息在末尾） |
+| `boots/` | 10 个 / 50 MB | LRU 删除最旧 |
+| `image.log` | 3 × 2 MB | 滚动 |
+| guest journal | 64 MB（§16.6 drop-in） | journald 自动轮转 |
+| 导出包 | ≤ 40 MB | 超限只带尾部并提示 |
+
+### 16.10 测试与验收
+
+| 层 | 用例 |
+|---|---|
+| 单元（vmdroid） | `boot_id` 生成/meta 序列化；轮转边界（10 个/50 MB）；`image.log` JSONL 可逐行解析；超时 90s 写 `fail_stage` |
+| 真机 | **启动失败**（喂损坏镜像）→ `meta.json` 有 `result=timeout` + `fail_stage` + `console_tail`；**连续 10 次启动** → `boots/` 不超 10 条；**换镜像触发重置** → `image.log` 有 `activate.decision=identity`；**断点下载** → `download_progress.resume=true` |
+| 导出 | 导出 zip 含全部条目且**无明文密码**（grep `123` 断言为 0，除文档说明字段） |
+| guest | journal 达 64MB 后自动轮转，`storage.img` 不因日志持续增长 |
+
+### 16.11 归属
+
+| 交付物 | 仓库 |
+|---|---|
+| 轮转、`boot_id`、`meta.json`、阶段打点、`image.log`、导出扩展、诊断 UI | vmdroid |
+| journald 限额 drop-in、（可选）guest 日志收集脚本 | Podroid-Debian |
+
+### 16.12 开放项
+
+| # | 问题 | 倾向 |
+|---|---|---|
+| LQ1 | 应用内一键拉取 guest journal（需 hostd 新命令 → 动 guest 契约二进制） | v1 不做（SSH 命令够用）；v2 评估 hostd 扩展的契约影响 |
+| LQ2 | `console.log` 是否也按 `boot_id` 分文件而非轮转改名 | 现方案改动最小（引擎零改动），保持 |
 
 ---
 
@@ -1248,13 +1473,16 @@ qemu-system-aarch64 \
 | 术语 | 含义 |
 |---|---|
 | VM / 虚拟机 | 由 QEMU(TCG) 或 AVF(pKVM) 运行的 Guest Linux，内核+initrd 来自 APK |
-| 系统镜像 `.img` | 单文件 Guest rootfs（squashfs 前置 + 可选种子 + manifest/footer） |
+| 系统镜像 `.img` | 单文件 Guest rootfs（squashfs 前置 + kernel/initrd + manifest/footer；**无种子段**） |
 | vda | 可写持久盘 `storage.img`（ext4），承载 overlay upper 与容器数据 |
 | vdb | 只读系统盘（`.img`），挂载为 `/mnt/lower` |
 | 启动契约 | `init-podroid` 挂载顺序、控制台标记、tty 角色、端口转发、存储布局 |
-| kernel/initrd payload | `.img` 内自带的 arm64 内核与 initrd 段（footer bit1/bit2），供 PC 端启动（R-16） |
+| kernel/initrd payload | `.img` 内自带的 arm64 内核与 initrd 段（footer bit0/bit1），供 PC 端启动（R-16） |
 | identity | 镜像的发行版标识，决定切换时是否必须重置数据盘 |
 | 同步点 | `Ready!` 控制台标记 → `VmState.Running`（上游 `BootStageDetector`） |
+| boot_id | 单次启动唯一标识（`yyyyMMddTHHmmss-6hex`），贯穿 meta.json 与日志行（§16.3） |
+| console.log | 最近一次启动的 guest 控制台原始流（契约路径，`boot-test.sh` 依赖） |
+| image.log | 镜像生命周期结构化日志（JSONL）：下载/导入/校验/激活/重置（§16.5） |
 
 ## 附录 B：参考
 

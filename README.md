@@ -20,7 +20,7 @@
 ```
 ┌────────── VMDroid APK (~70 MB) ──────────┐      ┌─── 系统镜像 .img (~150 MB) ──┐
 │ VM 引擎(QEMU/AVF) │ 内核+initrd │ UI      │      │ rootfs.squashfs  → vdb (只读) │
-│ 终端/VNC/USB/桥接 │ ★镜像管理器            │ ───▶ │ + 可选 ext4 种子 → vda (出厂)  │
+│ 终端/VNC/USB/桥接 │ ★镜像管理器            │ ───▶ │ + kernel/initrd → PC 可启动      │
 └───────────────────────────────────────────┘      │ + manifest + 校验和 (尾部)     │
                                                    └──────────────────────────────┘
 ```
@@ -38,6 +38,7 @@
 | 获取系统 | 应用内目录**下载**（断点续传 + sha256 校验）· 或**从文件导入**——**仅 `.img` 格式**（其他格式用 `mkimg.sh` 封装） |
 | **PC 启动** | `.img` 自带 kernel/initrd，Linux PC 上 `tools/pc-run.sh debian.img` 一条命令进入 `Ready!` |
 | 启动镜像 | Home 页**启动镜像选择控件**，一键切换已安装的 `.img`（详见 [DESIGN §8.2](docs/DESIGN.md)） |
+| 日志诊断 | **历史启动不丢**（`boots/` 归档 + 阶段耗时 + 失败原因），一键导出诊断包（详见 [DESIGN §16](docs/DESIGN.md)） |
 | 后续 | `debian-desktop.img` / `debian-containers.img` / `ubuntu.img` … 只加镜像，不改应用 |
 
 同 `identity`（如 `debian:trixie`）的镜像之间切换**不重置数据盘**；

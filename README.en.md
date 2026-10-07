@@ -20,7 +20,7 @@ Design: [docs/DESIGN.md](docs/DESIGN.md) · Image format: [docs/IMAGE-FORMAT.md]
 ```
 ┌────────── VMDroid APK (~70 MB) ──────────┐      ┌─── system image .img (~150 MB) ─┐
 │ VM engines (QEMU/AVF) │ kernel+initrd │UI │      │ rootfs.squashfs     → vdb (ro)   │
-│ terminal/VNC/USB/bridge │ ★image manager  │ ───▶ │ optional ext4 seed  → vda (fact) │
+│ terminal/VNC/USB/bridge │ ★image manager  │ ───▶ │ + kernel/initrd → boots on PC   │
 └───────────────────────────────────────────┘      │ manifest + checksums (trailer)   │
                                                    └──────────────────────────────────┘
 ```
@@ -38,6 +38,7 @@ A single system file — **Debian 13 (trixie) arm64 minimal install**, target �
 | Get the OS | in-app catalog **download** (resume + sha256) · or **import from file** — **`.img` only** (wrap others with `mkimg.sh`) |
 | **PC boot** | `.img` ships kernel+initrd; on Linux PC `tools/pc-run.sh debian.img` reaches `Ready!` in one command |
 | Boot image | a **boot-image selector** on the Home screen switches installed `.img` files (see [DESIGN §8.2](docs/DESIGN.md)) |
+| Diagnostics | **boot history is preserved** (`boots/` archive + stage timings + failure reason), one-tap diagnostic export (see [DESIGN §16](docs/DESIGN.md)) |
 | Later | `debian-desktop.img` / `debian-containers.img` / `ubuntu.img` … images only, no app update |
 
 Images sharing an `identity` (e.g. `debian:trixie`) switch **without** resetting the data disk;
