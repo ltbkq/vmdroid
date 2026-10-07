@@ -2,7 +2,13 @@
 
 **软件与系统分离的 Android 虚拟机** —— 虚拟机是独立软件，系统是一个可更换的 `.img` 文件。
 
-[English](README.en.md) | **简体中文** | 设计文档 [docs/DESIGN.md](docs/DESIGN.md) · 镜像格式 [docs/IMAGE-FORMAT.md](docs/IMAGE-FORMAT.md)
+> **语言说明 / Language**：本项目文档以**简体中文为准（主）**，
+> 英文版 [README.en.md](README.en.md) 仅为**辅助翻译**，可能滞后；
+> 两者若有歧义，**一律以中文版为准**。
+> The Chinese docs are the **primary** source; the English README is a
+> **secondary** translation and may lag. In case of conflict, the Chinese wins.
+
+设计文档 [docs/DESIGN.md](docs/DESIGN.md) · 镜像格式 [docs/IMAGE-FORMAT.md](docs/IMAGE-FORMAT.md) · 评审规程 [docs/REVIEW.md](docs/REVIEW.md)
 
 ## 核心目的
 
@@ -29,6 +35,9 @@
 | SSH | guest **默认端口 22**（链路 `adb forward tcp:9922 tcp:9922` → 手机 9922 → guest 22） |
 | 账户 | `root` / 密码 `123`，**`ltbkq` / 密码 `123`（免密 sudo）** —— 两者均可 SSH 登录 |
 | 验收 | `tools/boot-test.sh` 轮询 console 到 `Ready!`；双账户 SSH 登录成功 |
+| 获取系统 | 应用内目录**下载**（断点续传 + sha256 校验）· 或**从文件导入**——**仅 `.img` 格式**（其他格式用 `mkimg.sh` 封装） |
+| **PC 启动** | `.img` 自带 kernel/initrd，Linux PC 上 `tools/pc-run.sh debian.img` 一条命令进入 `Ready!` |
+| 启动镜像 | Home 页**启动镜像选择控件**，一键切换已安装的 `.img`（详见 [DESIGN §8.2](docs/DESIGN.md)） |
 | 后续 | `debian-desktop.img` / `debian-containers.img` / `ubuntu.img` … 只加镜像，不改应用 |
 
 同 `identity`（如 `debian:trixie`）的镜像之间切换**不重置数据盘**；

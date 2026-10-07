@@ -3,7 +3,11 @@
 **An Android VM with the software and the OS separated** — the VM is a standalone app,
 the system is a swappable `.img` file.
 
-English | [简体中文](README.md) | Design: [docs/DESIGN.md](docs/DESIGN.md) · Image format: [docs/IMAGE-FORMAT.md](docs/IMAGE-FORMAT.md)
+> **Language**: the **Chinese** documentation ([README.md](README.md)) is the
+> **primary** source. This English README is a **secondary** translation and may
+> lag behind. If the two ever disagree, **the Chinese version wins**.
+
+Design: [docs/DESIGN.md](docs/DESIGN.md) · Image format: [docs/IMAGE-FORMAT.md](docs/IMAGE-FORMAT.md) · Review protocol: [docs/REVIEW.md](docs/REVIEW.md)
 
 ## Purpose
 
@@ -31,6 +35,9 @@ A single system file — **Debian 13 (trixie) arm64 minimal install**, target �
 | SSH | guest listens on **default port 22** (chain: `adb forward tcp:9922 tcp:9922` → phone `:9922` → guest `:22`) |
 | Accounts | `root` / pw `123`, **`ltbkq` / pw `123` (passwordless sudo)** — both can log in over SSH |
 | Acceptance | `tools/boot-test.sh` polls console for `Ready!`; both accounts SSH in successfully |
+| Get the OS | in-app catalog **download** (resume + sha256) · or **import from file** — **`.img` only** (wrap others with `mkimg.sh`) |
+| **PC boot** | `.img` ships kernel+initrd; on Linux PC `tools/pc-run.sh debian.img` reaches `Ready!` in one command |
+| Boot image | a **boot-image selector** on the Home screen switches installed `.img` files (see [DESIGN §8.2](docs/DESIGN.md)) |
 | Later | `debian-desktop.img` / `debian-containers.img` / `ubuntu.img` … images only, no app update |
 
 Images sharing an `identity` (e.g. `debian:trixie`) switch **without** resetting the data disk;

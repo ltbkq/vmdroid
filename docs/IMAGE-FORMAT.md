@@ -15,7 +15,7 @@ VMDroid 的系统是一个**单文件** `*.img`。它既是一个**可直接挂�
 | 2 | 单文件自描述 | 尾部 footer 指向 manifest（JSON），含 identity/版本/能力/账户 |
 | 3 | 可校验 | 全文件 sha256（下载时算）+ 每个 payload 的 sha256（footer 内） |
 | 4 | 可携带 vda 种子 | 可选 ext4 payload，用于"恢复出厂" |
-| 5 | 向后兼容 | 无 footer 的裸 squashfs 仍可导入（降级为"未知镜像"） |
+| 5 | 单一格式（**N4**） | **只接受 `.img`**：footer 必需；裸 `.squashfs` 一律拒绝（无 manifest 就无 identity/校验） |
 | 6 | 不改启动契约 | 只提供 `vdb`；`vda`（`storage.img`）由应用创建，见 DESIGN §2.3 |
 
 ---
@@ -35,6 +35,16 @@ offset
      ├─────────────────────────────────────────────┤
      │ 零填充 → 对齐到 1 MiB 边界                    │
      ├─────────────────────────────────────────────┤
+     │ kernel payload (arm64 Image) [flags.bit1]   │  ← ★R-16 PC 端 -kernel
+     │ ... bytes = K ...                           │
+     ├─────────────────────────────────────────────┤
+     │ 零填充 → 对齐到 1 MiB 边界                    │
+     ├─────────────────────────────────────────────┤
+     │ initrd payload             [flags.bit2]     │  ← ★R-16 PC 端 -initrd
+     │ ... bytes = I ...                           │
+     ├─────────────────────────────────────────────┤
+     │ 零填充 → 对齐到 1 MiB 边界                    │
+     ├─────────────────────────────────────────────┤
      │ manifest JSON (UTF-8)                       │  ← 描述镜像语义
      │ ... bytes = M ...                           │
      ├─────────────────────────────────────────────┤
@@ -50,16 +60,18 @@ offset
 |---|---|
 | `rootfs_offset` | 恒为 `0`（format_version 1） |
 | `rootfs_size` | = squashfs `superblock.bytes_used` = `R` |
-| 段对齐 | `seed`、`manifest`、`footer` 均从 1 MiB 边界开始；`footer` 固定在 `[file_size-4096, file_size)` |
+| 段对齐 | `seed`、`manifest` 从 **1 MiB** 边界开始；`manifest` 之后零填充至 **4 KiB** 边界即 `footer_offset`，`file_size = footer_offset + 4096`（**footer 不要求 1 MiB 对齐**，R1: A-R1-8/B-R1-4） |
 | `manifest_size` | `1 ≤ M ≤ 65536` |
 | `seed_size` | `0` 或 `≥ 4096`，且为 4096 的倍数 |
+| `kernel_size` | `0` 或 `≥ 1 MiB`（arm64 `Image`，通常 10–30 MiB；须与 `flags.bit1` 一致） |
+| `initrd_size` | `0` 或 `≥ 4096`（须与 `flags.bit2` 一致） |
 | 填充 | 所有洞必须全零（读取方必须容忍非零垃圾：容忍即可，不校验） |
 | 压缩 | 整文件**不额外压缩**（squashfs 自身已 zstd/xz 压缩；外层压缩会破坏直挂） |
 
-> **为什么直挂可行**：squashfs superblock 位于 0x0，块表用绝对偏移，内核只读取到
-> `bytes_used` 为止，**尾随数据天然被忽略**。P0 必须在真机 QEMU + AVF 各验证一次
-> （DESIGN §13.3）。若任一后端不接受尾随数据 → 启用 `extract` 降级路径
-> （DESIGN §4.3），格式本身不变。
+> **为什么直挂可行**：squashfs superblock 位于 0x0，块表用绝对偏移，内核唯一尺寸校验是
+> `bytes_used ≤ 设备大小`（`fs/squashfs/super.c`），因此**尾随数据安全、截断危险**。
+> P0 必须在真机 QEMU + AVF 各验证一次（DESIGN §13.3）。
+> 若任一后端不接受尾随数据 → 走 `extract` 模式（DESIGN §4.3），格式本身不变。
 
 ---
 
@@ -80,16 +92,27 @@ offset
 | 120 | 8 | `manifest_offset` | u64 |
 | 128 | 8 | `manifest_size` | u64 = `M` |
 | 136 | 32 | `manifest_sha256` | 覆盖 manifest 全部 `M` 字节 |
-| 168 | 4 | `flags` | u32：bit0 = `HAS_SEED`，bit1..31 保留（必须为 0） |
-| 172 | 3916 | `reserved` | 全零 |
+| 168 | 4 | `flags` | u32：bit0 = `HAS_SEED`，bit1 = `HAS_KERNEL`，bit2 = `HAS_INITRD`，bit3..31 保留（必须为 0） |
+| 172 | 8 | `kernel_offset` | u64；无 = `0`（**R-16**：arm64 `Image` payload，PC 端 `-kernel` 直接用） |
+| 180 | 8 | `kernel_size` | u64；无 = `0` |
+| 188 | 32 | `kernel_sha256` | 无 = 全零 |
+| 220 | 8 | `initrd_offset` | u64；无 = `0`（PC 端 `-initrd`） |
+| 228 | 8 | `initrd_size` | u64；无 = `0` |
+| 236 | 32 | `initrd_sha256` | 无 = 全零 |
+| 268 | 3820 | `reserved` | 全零 |
 | 4088 | 8 | `magic_tail` | 再次 `"VMDIMG01"`（快速定位/截断检测） |
 
 **footer 解析规则**
 
-1. `file_size = <实际文件大小>`；`file_size < 8192` → 拒绝。
-2. 读最后 4096 字节 → 校验 `magic == "VMDIMG01"` 且 `magic_tail == "VMDIMG01"`。
-3. 校验 `footer_size == 4096`、`format_version ≤ 1`、`flags 保留位为 0`。
-4. 校验 `file_size == <实际文件大小>`（否则 = 截断/拼接，拒绝）。
+1. 先判断 `file_size ≥ 4096`；读最后 4096 字节 → 校验 `magic`/`magic_tail`。
+   - 魔数不匹配 → 走拒绝分支（N4：裸 squashfs 提示封装；否则"非本格式"）。
+   - 魔数匹配才检查 `file_size < 8192 → 拒绝`（避免误杀极小合法文件，R1: B-R1-11）。
+2. 校验 `footer_size == 4096`、`format_version ≤ 1`、`flags 保留位为 0`。
+3. 校验 `file_size == <实际文件大小>`（否则 = 截断/拼接，拒绝）。
+4. **边界/溢出校验**（R1: B-R1-10，用溢出安全比较）：
+   `rootfs_size ≤ seed_offset ≤ manifest_offset`、
+   `manifest_offset + manifest_size ≤ file_size - 4096`、
+   `seed_offset + seed_size ≤ manifest_offset` —— 任一不满足按损坏拒绝。
 5. 定位 `manifest_offset/manifest_size` → 读出 → sha256 比对。
 6. 逐 payload 校验 sha256（可延迟到"校验"动作，见 DESIGN §6.4）。
 
@@ -107,8 +130,8 @@ offset
     "display_name": "Debian 13 (trixie) · 最小化",
     "identity": "debian:trixie",       // ★ 决定切换时是否需要重置数据盘（DESIGN §5.2）
     "variant": "minimal",              // minimal | desktop | containers | full
-    "version": "1.0.0",                // 镜像自身版本（语义化）
-    "system_version": 1,               // 对应 guest 内 /etc/podroid/system-version
+    "version": "2026.10.0-r1",         // 镜像版本 = 日期+修订号（与 DESIGN §6.1 catalog 同格式）
+    "system_version": 34,              // 对应 guest 内 /etc/podroid/system-version（与 catalog 一致）
     "arch": "arm64",                   // 必须 "arm64"，否则拒绝
     "distro": { "name": "debian", "release": "trixie", "init": "systemd" },
     "created_at": "2026-10-07T00:00:00Z",
@@ -131,7 +154,8 @@ offset
     "desktop": false,     // 桌面环境 (xfce4)
     "containers": false,
     "desktop_profile": false,
-    "downloads_share": true
+    "downloads_share": true,
+    "usb_passthrough_host": true   // 由应用决定，镜像声明仅供参考（R1: A-R1-15）
   },
 
   "accounts": {                        // ★ 账户规范（DESIGN §4.8）
@@ -145,7 +169,16 @@ offset
 
   "app": { "min_version_code": 1 },
 
-  "checksums": {                       // 与 footer 字段一致（JSON 侧便于工具读取）
+  "boot": {                        // ★ R-16：PC 端启动所需（与 footer 对应）
+    "machine": "virt",             // qemu-system-aarch64 -M
+    "cpu": "max",                  // TCG 可用；arm64 主机可换 host
+    "append": "console=ttyAMA0 mitigations=off",   // 基础 cmdline（应用可追加 podroid.*）
+    "kernel_sha256": "…",          // = footer.kernel_sha256（JSON 侧便于工具读取）
+    "initrd_sha256": "…",
+    "drives": { "vda": "storage.img(rw,ext4)", "vdb": "<self>(ro,squashfs)" }
+  },
+
+  "checksums": {                   // 与 footer 字段一致（JSON 侧便于工具读取）
     "rootfs_sha256": "…",
     "seed_sha256": null
   }
@@ -155,12 +188,18 @@ offset
 **字段规则**
 
 - 未知字段**必须忽略**（前向兼容），不得拒绝解析。
-- 缺省解释（兼容旧/裸镜像）：
+- 缺省解释（`.img` 均带 manifest，此处理论兜底）：
   - 无 `capabilities` → `{ssh:true, x11:true, containers:true}`（对齐上游全量镜像）
-  - 无 `accounts` → 仅 `root`（上游 Alpine/Debian 现状）
+  - 无 `accounts` → 仅 `root`、`ssh_port = 22`
   - 无 `contract` → 视为 `contract.version = 1`
-- `identity` 是**唯一**参与重置判定的字段；`version`/`system_version` 只用于展示与升级判断。
 - `capabilities.ssh` 若为 `false` → 镜像不合格，`mkimg` 与应用均拒绝（SSH 是硬性要求）。
+- `accounts.ssh_port` **缺省 22；≠ 22 一律拒绝**（§4.8 端口规范）。
+- **重置判定（DESIGN §5.2，三步）**：
+  1. `rootfs_sha256` 相同 → 同一系统，**永不重置**（内容优先）；
+  2. `identity` 不同 → `RESET_REQUIRED`；
+  3. `contract.version` 或 `distro.init` 不同 → 即使 identity 相同也 `RESET_REQUIRED`（硬判据）。
+  `version` / `system_version` **不参与**判定，仅用于展示与升级提示。
+- `image.id` 必须匹配 `^[a-z0-9][a-z0-9._-]{0,63}$`（防 `-drive` 选项注入，DESIGN §6.1）。
 
 ---
 
@@ -168,18 +207,25 @@ offset
 
 ```
 open(file) -> size
-if size < 8192: reject("too small")
+if size < 4096: reject("too small")
 seek(size - 4096); read 4096 bytes as footer
-if footer.magic != "VMDIMG01" or footer.magic_tail != "VMDIMG01": 
-    -> 裸 squashfs 降级路径：检查 offset0 == "hsqs"，是则按"无 manifest 镜像"处理
+if footer.magic != "VMDIMG01" or footer.magic_tail != "VMDIMG01":
+    -> 读 offset0：若为 "hsqs" → reject("裸 squashfs，需用 mkimg.sh 封装为 .img")
+    -> 否则 reject("非 VMDroid 系统镜像")        # N4：不接受任何非 .img 输入
 if footer.file_size != size: reject("truncated")
 if footer.format_version > 1: reject("format too new, update app")
 if footer.flags & ~0x1: reject("unknown flags")
+# 边界/溢出校验（R1: B-R1-10）：任一不满足 → 按损坏拒绝
+if not (rootfs_size <= seed_offset <= manifest_offset): reject("bad offsets")
+if manifest_offset + manifest_size > file_size - 4096: reject("manifest out of range")
 read manifest at [manifest_offset, +manifest_size); sha256 == manifest_sha256?
-parse JSON -> validate arch == "arm64", capabilities.ssh == true,
+parse JSON -> validate arch == "arm64", capabilities.ssh == true, accounts.ssh_port == 22,
               app.min_version_code <= currentVersionCode
 activePath = file            # direct 模式（零拷贝直挂为 vdb）
 ```
+
+> 上述加法运算须用**溢出安全**比较（`a > MAX - b` 而非 `a + b > MAX`）。
+> `file_size < 8192` 的拒绝只在 footer magic 匹配后才执行，避免误杀（R1: B-R1-11）。
 
 **校验时机**
 
@@ -198,18 +244,22 @@ activePath = file            # direct 模式（零拷贝直挂为 vdb）
 tools/mkimg.sh \
     --rootfs out/debian-rootfs.squashfs \
     --manifest manifest.json \
+    --kernel  out/vmlinuz-virt \      # ★ R-16：写入 kernel payload
+    --initrd  out/initrd.img \        # ★ R-16：写入 initrd payload
     [--seed  seed.ext4] \
-    -o out/debian-minimal-arm64.img
+    -o out/debian.img
 ```
 
 步骤：
 
-1. 读 `rootfs` 大小 `R`，算 `rootfs_sha256`（流式）。
-2. 计算各段 1 MiB 对齐偏移；若有 seed，读取并算 `seed_sha256`。
+1. 读 `rootfs` 大小 `R`（取 `superblock.bytes_used`，**丢弃**尾部 4096 补齐字节），算 `rootfs_sha256`。
+2. 计算各段 1 MiB 对齐偏移；依次读取 seed?/kernel?/initrd? 并各算 sha256。
 3. 写 manifest JSON（UTF-8）→ 算 `manifest_sha256`。
-4. 顺序写出：`rootfs` → 填充 → `seed?` → 填充 → `manifest` → 填充 → `footer`。
+4. 顺序写出：`rootfs` → 填充 → `seed?` → 填充 → `kernel?` → 填充 → `initrd?`
+   → 填充 → `manifest` → 填充（4 KiB 对齐）→ `footer`。
 5. `fsync`；输出全文件 sha256 + 体积，供 catalog 使用。
-6. 自检：用同一解析器回读一遍（工具与应用共用解析规则）。
+6. **自检**：① 同一解析器回读；② 若含 kernel/initrd → 自动跑 `pc-boot-smoke.sh`
+   （起 QEMU 60s，断言出现 `Ready!`，见 DESIGN §13.2 R-16 用例）。
 
 **注意**：现有 `Podroid-Debian/out/debian-rootfs.squashfs` **无需重建**，
 `mkimg` 只是在尾部追加（秒级完成）。
@@ -221,9 +271,9 @@ tools/mkimg.sh \
 | 输入 | 识别 | 处理 |
 |---|---|---|
 | `VMDIMG01` footer | 完整格式 | 全功能（identity/capabilities/accounts） |
-| 裸 squashfs（`hsqs` @0，无 footer） | 魔数 | 零拷贝直挂；`identity = sha256:<前16hex>`；capabilities 按缺省解释 |
-| Podroid-Debian `debian-rootfs.squashfs` | 同上 | 可直接导入（**现有产物即刻可用**） |
-| 上游 `alpine-rootfs.squashfs` | 同上 | 回归基线可导入 |
+| 裸 squashfs（`hsqs` @0，无 footer） | 魔数 | **拒绝**（N4）：提示用 `mkimg.sh` 封装 |
+| Podroid-Debian `debian-rootfs.squashfs` | 同上 | **拒绝**（同上；先封装为 `.img`，秒级追加） |
+| 上游 `alpine-rootfs.squashfs` | 同上 | **拒绝**（回归基线改用封装后的 `.img`） |
 | 其他（zip/img from 其他项目…） | 魔数不符 | 拒绝并提示 |
 | `format_version > 1` | footer | 拒绝，提示升级应用 |
 
@@ -240,8 +290,14 @@ tools/mkimg.sh \
 | manifest 单字节翻转 | `manifest_sha256` 不匹配 → 拒绝 |
 | `arch != arm64` | 拒绝激活 |
 | `capabilities.ssh == false` | 拒绝（违反 §4.8） |
-| 裸 squashfs | 降级路径成功激活 |
+| 裸 squashfs | **拒绝**并提示封装（N4） |
 | `format_version = 2` | 拒绝并提示升级应用 |
+| `manifest_offset+manifest_size` 越界 / 偏移乱序 | 拒绝（B-R1-10 边界校验） |
+| `flags.bit1` 置位但 `kernel_size == 0` | 拒绝（flags 与段不一致） |
+| kernel payload 单字节翻转 | `kernel_sha256` 不匹配 → 拒绝（R-16：坏内核不能上机） |
+| **PC 冒烟**：`qemu-system-aarch64` 用 `.img` 内 kernel/initrd 启动 | 60s 内出现 `Ready!`（R-16 主验收） |
+| `accounts.ssh_port = 2222` | 拒绝（违反 §4.8 端口规范） |
+| 扩展名 `.img` 但内容是 zip | 拒绝（以 footer 魔数为准，不看扩展名） |
 | 尾随数据（P0 spike） | QEMU + AVF 真机均可挂载并进入 `Ready!` |
 
 ---
@@ -251,7 +307,8 @@ tools/mkimg.sh \
 | 本文 | DESIGN.md |
 |---|---|
 | 布局与直挂 | §4.2 / §4.3 |
-| manifest 解析与降级 | §4.4 / §5.4 |
+| 仅 `.img`（拒绝裸 squashfs） | §4.3 N4 约束 / §5.4 |
+| manifest 解析与激活前校验 | §4.4 / §5.2 |
 | capabilities | §4.6 |
 | accounts（root + ltbkq，pw 123，SSH 22） | §4.8 |
 | 校验时机与 `.meta.json` | §6.4 |
