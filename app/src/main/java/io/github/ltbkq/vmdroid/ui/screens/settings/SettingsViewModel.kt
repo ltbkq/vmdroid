@@ -66,6 +66,7 @@ data class SettingsUiState(
     val systemDefaultLanguage: String = "auto",
     val loadBalanceEnabled: Boolean = false,
     val bandwidthMbps: Int = 0,
+    val downloadsWifiOnly: Boolean = false,
 )
 
 // Typed intermediates for the three sub-combines below, so a reordered flow
@@ -135,7 +136,8 @@ class SettingsViewModel @Inject constructor(
         ) { bandwidth, engineSel, lang, sysLang ->
             LocaleRowsGroup(bandwidth, engineSel, lang, sysLang)
         },
-    ) { vm, misc, locale ->
+        settingsRepository.downloadsWifiOnly,
+    ) { vm, misc, locale, wifiOnly ->
         SettingsUiState(
             vmRamMb = vm.vmRamMb,
             vmCpus = vm.vmCpus,
@@ -151,6 +153,7 @@ class SettingsViewModel @Inject constructor(
             systemDefaultLanguage = locale.systemDefaultLanguage,
             loadBalanceEnabled = vm.loadBalanceEnabled,
             bandwidthMbps = locale.bandwidthMbps,
+            downloadsWifiOnly = wifiOnly,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsUiState())
 
@@ -182,6 +185,11 @@ class SettingsViewModel @Inject constructor(
 
     fun setStorageAccessEnabled(value: Boolean) {
         viewModelScope.launch { settingsRepository.setStorageAccessEnabled(value) }
+    }
+
+    /** §6.2「仅 Wi-Fi 下载」：目录下载的计量网络门控开关（Settings 页）。 */
+    fun setDownloadsWifiOnly(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setDownloadsWifiOnly(value) }
     }
 
     val portForwardRules: StateFlow<List<PortForwardRule>> = portForwardRepository.rules

@@ -21,6 +21,7 @@ import androidx.navigation.compose.rememberNavController
 import io.github.ltbkq.vmdroid.engine.control.ControlProviderEntryPoint
 import dagger.hilt.android.EntryPointAccessors
 import io.github.ltbkq.vmdroid.ui.screens.home.HomeScreen
+import io.github.ltbkq.vmdroid.ui.screens.images.ImagesScreen
 import io.github.ltbkq.vmdroid.ui.screens.settings.SettingsScreen
 import io.github.ltbkq.vmdroid.ui.screens.setup.SetupScreen
 import io.github.ltbkq.vmdroid.ui.screens.terminal.TerminalScreen
@@ -32,6 +33,7 @@ import io.github.ltbkq.vmdroid.ui.screens.x11.X11Screen
 object Routes {
     const val SETUP         = "setup"
     const val HOME          = "home"
+    const val IMAGES        = "images"
     const val TERMINAL      = "terminal"
     const val TERMINAL_X11  = "terminal/x11"
     const val SETTINGS      = "settings"
@@ -114,6 +116,24 @@ fun VmdroidNavGraph(
                 },
                 onNavigateToContainerBackup = {
                     navController.navigate(Routes.CONTAINER_BACKUP) { launchSingleTop = true }
+                },
+                onNavigateToImages = {
+                    navController.navigate(Routes.IMAGES) { launchSingleTop = true }
+                },
+            )
+        }
+
+        composable(Routes.IMAGES) {
+            ImagesScreen(
+                windowSizeClass = windowSizeClass,
+                onNavigateBack = {
+                    if (navController.currentDestination?.route == Routes.IMAGES) {
+                        navController.popBackStack()
+                    } else if (!navController.popBackStack(Routes.HOME, inclusive = false)) {
+                        navController.navigate(Routes.HOME) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
                 },
             )
         }
@@ -202,6 +222,9 @@ fun VmdroidNavGraph(
                 onLanguageChanged = onLanguageChanged,
                 onNavigateToContainerBackup = {
                     navController.navigate(Routes.CONTAINER_BACKUP) { launchSingleTop = true }
+                },
+                onNavigateToImages = {
+                    navController.navigate(Routes.IMAGES) { launchSingleTop = true }
                 },
             )
         }

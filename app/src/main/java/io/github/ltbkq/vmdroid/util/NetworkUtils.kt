@@ -34,6 +34,18 @@ object NetworkUtils {
     } catch (_: Exception) { "unknown" }
 
     /**
+     * §6.2「仅 Wi-Fi 下载」判定：`true` = 默认网络**不可计量**（Wi-Fi / 以太网），
+     * 下载放行；`false` = 蜂窝等可计量网络或状态未知，设置要求时应拦截。
+     * 用 `NET_CAPABILITY_NOT_METERED` 而非 transport 匹配 —— 运营商把 Wi-Fi
+     * 标成 metered（热点共享）时同样正确。
+     */
+    fun isUnmetered(context: Context): Boolean = try {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+    } catch (_: Exception) { false }
+
+    /**
      * Every IPv4 address a peer could plausibly reach this device on, most useful first.
      *
      * [localIpv4] deliberately answers "the one address traffic leaves through", which is

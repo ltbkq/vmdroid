@@ -53,6 +53,16 @@ class VmdroidApplication : Application() {
         // §7.3 / IMP-D09: settle the .meta.json verdicts off the main thread;
         // launchVmdroid awaits awaitImagesReady() next to awaitAssetsReady().
         appScope.launch { preflightImages() }
+        // §6.2 自动续传（M4）：进程被杀遗留的 images/*.part 下次进入应用恢复。
+        // 独立协程 —— 网络慢不能拖 imagesReady/awaitAssetsReady 门控。
+        appScope.launch {
+            try {
+                val resumed = systemImages.resumeInterruptedDownloads()
+                if (resumed > 0) Log.i(TAG, "auto-resumed $resumed interrupted image download(s)")
+            } catch (t: Throwable) {
+                Log.w(TAG, "auto-resume of interrupted downloads failed", t)
+            }
+        }
     }
 
     /**

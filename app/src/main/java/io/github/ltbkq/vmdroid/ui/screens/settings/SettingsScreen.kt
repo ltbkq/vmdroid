@@ -113,6 +113,7 @@ fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onLanguageChanged: () -> Unit = {},
     onNavigateToContainerBackup: () -> Unit = {},
+    onNavigateToImages: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -286,6 +287,22 @@ fun SettingsScreen(
                     enabled = ui.storageAccessEnabled,
                     vmNotRunning = vmNotRunning,
                     onToggle = { viewModel.setStorageAccessEnabled(it) },
+                )
+                VmdroidListRow(
+                    label = stringResource(R.string.images_title),
+                    value = stringResource(R.string.images_catalog_section),
+                    trailing = "›",
+                    onClick = onNavigateToImages,
+                )
+                VmdroidListRow(
+                    label = stringResource(R.string.settings_downloads_wifi_only),
+                    onClick = { viewModel.setDownloadsWifiOnly(!ui.downloadsWifiOnly) },
+                    rightSlot = {
+                        VmdroidSwitch(
+                            checked = ui.downloadsWifiOnly,
+                            onCheckedChange = { viewModel.setDownloadsWifiOnly(it) },
+                        )
+                    },
                 )
                 VmdroidListRow(
                     label = stringResource(R.string.container_backup_title),

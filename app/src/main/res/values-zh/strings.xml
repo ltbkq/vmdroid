@@ -378,4 +378,47 @@
     <string name="reset_confirm_switch">重置并切换</string>
     <string name="reset_confirm_keep">切换（保留数据）</string>
     <string name="reset_advanced_keep">高级：保留数据（可能导致系统无法启动）</string>
+
+    <!-- M4: 镜像下载通知（§6.2 / §8.3） -->
+    <string name="channel_download_name">系统镜像下载</string>
+    <string name="notif_download_title">正在下载 %1$s</string>
+    <string name="notif_download_progress">%1$d%% · %2$s</string>
+    <string name="notif_download_done">%1$s 下载完成</string>
+    <string name="notif_download_fail">%1$s 下载失败</string>
+
+    <!-- M4: 镜像管理页（§8.3） -->
+    <string name="images_title">系统镜像</string>
+    <string name="images_installed_section">已安装</string>
+    <string name="images_catalog_section">在线目录</string>
+    <string name="images_empty">尚未安装系统镜像</string>
+    <string name="images_set_active">设为启动镜像</string>
+    <string name="images_verify">校验</string>
+    <string name="images_verify_now">立即校验</string>
+    <string name="images_factory_reset">恢复出厂</string>
+    <string name="images_remove">移除</string>
+    <string name="images_status_active">使用中</string>
+    <string name="images_verifying">校验中…</string>
+    <string name="images_import">从文件导入 .img…</string>
+    <string name="images_refresh">刷新</string>
+    <string name="images_subscribe">订阅设置</string>
+    <string name="images_subscribe_hint">目录 URL（catalog.json）</string>
+    <string name="images_subscribe_save">保存</string>
+    <string name="images_download_retry">下载失败，点击重试</string>
+    <string name="images_wifi_only">仅 Wi-Fi</string>
+    <string name="images_catalog_empty">目录暂无可用镜像</string>
+    <string name="images_catalog_loading">正在获取镜像目录…</string>
+    <string name="images_catalog_error">获取镜像目录失败：%1$s</string>
+    <string name="images_catalog_malformed">镜像目录格式错误</string>
+    <string name="images_catalog_sig_invalid">镜像目录签名无效</string>
+    <string name="images_eta">剩 %1$s</string>
+    <string name="images_remove_confirm_title">移除镜像？</string>
+    <string name="images_remove_confirm_body">将删除 %1$s 及其校验记录。</string>
+    <string name="images_remove_active_warn">使用中的镜像也会被移除 —— 下次启动前需选择其他镜像。</string>
+    <string name="images_removed">已删除 %1$s</string>
+    <string name="images_factory_confirm_title">恢复出厂数据？</string>
+    <string name="images_factory_confirm_body">将清空虚拟机数据盘 storage.img（容器数据、已装包、/root 内容），下次启动自动重新格式化。</string>
+    <string name="images_factory_done">数据盘已清零，下次启动生效</string>
+    <string name="images_err_storage_full">存储空间不足，无法下载</string>
+    <string name="images_stop_vm_first">请先停止虚拟机</string>
+    <string name="settings_downloads_wifi_only">仅 Wi-Fi 下载</string>
 </resources>

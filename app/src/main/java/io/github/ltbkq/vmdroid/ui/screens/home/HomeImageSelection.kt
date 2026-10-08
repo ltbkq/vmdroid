@@ -29,6 +29,8 @@ data class ImageRowUi(
     /** §8.2「已损坏」标记（Compose 层给 error 色 + ⚠ + 文字三重编码）。 */
     val corrupt: Boolean,
     val active: Boolean,
+    /** manifest `image.system_version`（§8.3 卡片版本行；缺失不显示段落）。 */
+    val systemVersion: Long? = null,
 ) {
     /** 行首：`Debian 13 (trixie) · 最小化`（无变体时只有名称）。 */
     val line1: String = buildString {
@@ -38,6 +40,12 @@ data class ImageRowUi(
 
     /** 行次：`debian-minimal-arm64 · 148 MB`。 */
     val line2: String = "$imageId · $sizeLabel"
+
+    /** §8.3 版本行：`debian:trixie · system_version 34`（identity 缺失回退 —）。 */
+    val versionLine: String = buildString {
+        append(identity ?: "—")
+        if (systemVersion != null) append(" · system_version ").append(systemVersion)
+    }
 }
 
 /** §8.5 激活冲突对话框入参（identity 文案取自 active 记录与目标 manifest）。 */
@@ -135,6 +143,7 @@ fun buildImageRow(
     identity: String?,
     activeId: String?,
     corrupt: Boolean = false,
+    systemVersion: Long? = null,
 ): ImageRowUi = ImageRowUi(
     imageId = imageId,
     displayName = displayName ?: imageId,
@@ -143,6 +152,7 @@ fun buildImageRow(
     sizeLabel = formatBytes(fileLength),
     corrupt = corrupt,
     active = imageId == activeId,
+    systemVersion = systemVersion,
 )
 
 /**

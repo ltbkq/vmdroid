@@ -377,4 +377,47 @@
     <string name="reset_confirm_switch">Reset &amp; switch</string>
     <string name="reset_confirm_keep">Switch (keep data)</string>
     <string name="reset_advanced_keep">Advanced: keep data (may not boot)</string>
+
+    <!-- M4: image download notifications (§6.2 / §8.3) -->
+    <string name="channel_download_name">System image downloads</string>
+    <string name="notif_download_title">Downloading %1$s</string>
+    <string name="notif_download_progress">%1$d%% · %2$s</string>
+    <string name="notif_download_done">%1$s download complete</string>
+    <string name="notif_download_fail">%1$s download failed</string>
+
+    <!-- M4: images page (§8.3) -->
+    <string name="images_title">System images</string>
+    <string name="images_installed_section">Installed</string>
+    <string name="images_catalog_section">Online catalog</string>
+    <string name="images_empty">No system image installed</string>
+    <string name="images_set_active">Set as boot image</string>
+    <string name="images_verify">Verify</string>
+    <string name="images_verify_now">Verify now</string>
+    <string name="images_factory_reset">Factory reset</string>
+    <string name="images_remove">Remove</string>
+    <string name="images_status_active">Active</string>
+    <string name="images_verifying">Verifying…</string>
+    <string name="images_import">Import .img from file…</string>
+    <string name="images_refresh">Refresh</string>
+    <string name="images_subscribe">Subscription settings</string>
+    <string name="images_subscribe_hint">Catalog URL (catalog.json)</string>
+    <string name="images_subscribe_save">Save</string>
+    <string name="images_download_retry">Download failed — tap to retry</string>
+    <string name="images_wifi_only">Wi-Fi only</string>
+    <string name="images_catalog_empty">No images in the catalog</string>
+    <string name="images_catalog_loading">Loading catalog…</string>
+    <string name="images_catalog_error">Couldn\'t load the image catalog: %1$s</string>
+    <string name="images_catalog_malformed">Malformed image catalog</string>
+    <string name="images_catalog_sig_invalid">Image catalog signature invalid</string>
+    <string name="images_eta">%1$s left</string>
+    <string name="images_remove_confirm_title">Remove image?</string>
+    <string name="images_remove_confirm_body">This deletes %1$s and its verification record.</string>
+    <string name="images_remove_active_warn">The active image will be removed too — you\'ll need to pick another one before starting.</string>
+    <string name="images_removed">Removed %1$s</string>
+    <string name="images_factory_confirm_title">Factory reset VM data?</string>
+    <string name="images_factory_confirm_body">Wipes storage.img (container data, installed packages, /root). It is re-formatted automatically on next start.</string>
+    <string name="images_factory_done">Storage wiped — takes effect on next start</string>
+    <string name="images_err_storage_full">Not enough storage to download</string>
+    <string name="images_stop_vm_first">Stop the VM first</string>
+    <string name="settings_downloads_wifi_only">Download over Wi-Fi only</string>
 </resources>

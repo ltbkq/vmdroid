@@ -201,11 +201,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    init {
-        checkForUpdate()
-        refreshImages()
-    }
-
     // ---------------------------------------------------------------- §8.2 启动镜像选择
 
     private val _images = MutableStateFlow<HomeImageState>(HomeImageState.Loading)
@@ -217,6 +212,14 @@ class HomeViewModel @Inject constructor(
 
     /** §8.5 激活冲突对话框（非空即显示；确认或取消后清空）。 */
     val resetPrompt: StateFlow<ResetPrompt?> = _resetPrompt.asStateFlow()
+
+    // init 放在**全部属性之后**：checkForUpdate()/refreshImages() 经
+    // Dispatchers.Main.immediate 在构造期内同步跑，读到声明在后的
+    // MutableStateFlow 会拿到 JVM 默认 null（NPE，机上实测闪退）。
+    init {
+        checkForUpdate()
+        refreshImages()
+    }
 
     /** §8.2「运行中禁用」（v1 不做热切换）。 */
     private fun vmBusy(): Boolean {
@@ -246,6 +249,7 @@ class HomeViewModel @Inject constructor(
                             identity = image?.identity,
                             activeId = activeId,
                             corrupt = prev?.row(installed.imageId)?.corrupt == true,
+                            systemVersion = image?.systemVersion,
                         )
                     }
                     HomeImageState.Loaded(
@@ -431,24 +435,12 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /** §6.3/§7.4 异常 → 用户文案（非 .img 给封装指引）。 */
-    private fun imageErrorMessage(t: Throwable): String = when (t) {
-        is VmdImageException -> imageErrorMessage(t.reason, t.message)
-        else -> context.getString(R.string.image_err_generic, t.message ?: t.javaClass.simpleName)
-    }
+    /** §6.3/§7.4 异常 → 用户文案（共享实现见 ui/ImageMessages.kt，与 Images 页同源）。 */
+    private fun imageErrorMessage(t: Throwable): String =
+        io.github.ltbkq.vmdroid.ui.imageErrorMessage(context, t)
 
-    private fun imageErrorMessage(reason: VmdImageReason, detail: String?): String = when (reason) {
-        VmdImageReason.NOT_AN_IMAGE, VmdImageReason.MANIFEST_INVALID ->
-            context.getString(R.string.image_err_not_an_image)
-        VmdImageReason.CORRUPT, VmdImageReason.TRUNCATED, VmdImageReason.PAYLOAD_CORRUPT,
-        VmdImageReason.IO_ERROR,
-        -> context.getString(R.string.image_err_corrupt)
-        VmdImageReason.FORMAT_UNSUPPORTED -> context.getString(R.string.image_err_format)
-        VmdImageReason.ARCH_MISMATCH -> context.getString(R.string.image_err_arch)
-        VmdImageReason.APP_TOO_OLD -> context.getString(R.string.image_err_app_old)
-        VmdImageReason.NO_SYSTEM_IMAGE -> context.getString(R.string.image_err_missing)
-        else -> context.getString(R.string.image_err_generic, detail ?: reason.name)
-    }
+    private fun imageErrorMessage(reason: VmdImageReason, detail: String?): String =
+        io.github.ltbkq.vmdroid.ui.imageErrorMessage(context, reason, detail)
 
     /** Format "Up Xm Ys" / "Up Xh Ym" from the engine's →Running timestamp. */
     fun uptimeLabel(@Suppress("UNUSED_PARAMETER") tickerTrigger: Long): String? {

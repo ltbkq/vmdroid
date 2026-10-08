@@ -52,6 +52,9 @@ class SettingsRepository @Inject constructor(
         val KEY_STORAGE_ACCESS_ENABLED = booleanPreferencesKey("storage_access_enabled")
         val KEY_SETUP_DONE             = booleanPreferencesKey("setup_done")
         val KEY_SSH_ENABLED            = booleanPreferencesKey("ssh_enabled")
+        // M4 / §6.1-§6.2：镜像目录订阅 URL（默认 GitHub Release）与「仅 Wi-Fi 下载」
+        val KEY_CATALOG_URL            = stringPreferencesKey("catalog_url")
+        val KEY_DOWNLOADS_WIFI_ONLY    = booleanPreferencesKey("downloads_wifi_only")
         val KEY_TERMINAL_COLOR_THEME   = stringPreferencesKey("terminal_color_theme")
         val KEY_TERMINAL_FONT          = stringPreferencesKey("terminal_font")
         val KEY_QEMU_EXTRA_ARGS        = stringPreferencesKey("qemu_extra_args")
@@ -142,6 +145,8 @@ class SettingsRepository @Inject constructor(
     val storageAccessEnabled = pref(KEY_STORAGE_ACCESS_ENABLED, false)
     val isSetupDone          = pref(KEY_SETUP_DONE, false)
     val sshEnabled           = pref(KEY_SSH_ENABLED, false)
+    val catalogUrl           = pref(KEY_CATALOG_URL, ImageCatalogRepository.DEFAULT_URL)
+    val downloadsWifiOnly    = pref(KEY_DOWNLOADS_WIFI_ONLY, false)
     val terminalColorTheme   = pref(KEY_TERMINAL_COLOR_THEME, "default")
     val terminalFont         = pref(KEY_TERMINAL_FONT, "default")
     val qemuExtraArgs        = pref(KEY_QEMU_EXTRA_ARGS, DEFAULT_QEMU_EXTRA_ARGS)
@@ -186,6 +191,8 @@ class SettingsRepository @Inject constructor(
     suspend fun setStorageSizeGb(value: Int)             = set(KEY_STORAGE_GB, value)
     suspend fun setStorageAccessEnabled(value: Boolean)  = set(KEY_STORAGE_ACCESS_ENABLED, value)
     suspend fun setSshEnabled(value: Boolean)            = set(KEY_SSH_ENABLED, value)
+    suspend fun setCatalogUrl(value: String)             = set(KEY_CATALOG_URL, value)
+    suspend fun setDownloadsWifiOnly(value: Boolean)     = set(KEY_DOWNLOADS_WIFI_ONLY, value)
     suspend fun setTerminalColorTheme(value: String)     = set(KEY_TERMINAL_COLOR_THEME, value)
     suspend fun setTerminalFont(value: String)           = set(KEY_TERMINAL_FONT, value)
     suspend fun setQemuExtraArgs(value: String)          = set(KEY_QEMU_EXTRA_ARGS, value)
@@ -275,6 +282,8 @@ class SettingsRepository @Inject constructor(
 
     // Snapshots used by non-Compose call sites (VmdroidService, exporters).
     suspend fun getSshEnabledSnapshot()           = sshEnabled.first()
+    suspend fun getCatalogUrlSnapshot()           = catalogUrl.first()
+    suspend fun getDownloadsWifiOnlySnapshot()    = downloadsWifiOnly.first()
     suspend fun getVmRamMbSnapshot()              = vmRamMb.first()
     suspend fun getVmCpusSnapshot()               = vmCpus.first()
     suspend fun getStorageSizeGbSnapshot()        = storageSizeGb.first()

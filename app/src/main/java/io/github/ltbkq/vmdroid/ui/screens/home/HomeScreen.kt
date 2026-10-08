@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -73,6 +74,7 @@ import io.github.ltbkq.vmdroid.engine.avf.AvfFailureGuidance
 import io.github.ltbkq.vmdroid.service.VmdroidService
 import io.github.ltbkq.vmdroid.ui.components.AdaptiveContainer
 import io.github.ltbkq.vmdroid.ui.components.PermissionRows
+import io.github.ltbkq.vmdroid.ui.components.ResetConfirmDialog
 import io.github.ltbkq.vmdroid.ui.components.VmdroidDestructiveButton
 import io.github.ltbkq.vmdroid.ui.components.VmdroidGhostButton
 import io.github.ltbkq.vmdroid.ui.components.VmdroidListRow
@@ -97,6 +99,7 @@ fun HomeScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToStatus: () -> Unit,
     onNavigateToContainerBackup: () -> Unit,
+    onNavigateToImages: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -217,51 +220,12 @@ fun HomeScreen(
         )
     }
 
-    // §8.5 激活冲突对话框（identity/contract/init 重置确认）：
-    // 默认「重置并切换」= 清零 storage.img → activate(allowReset=true)；
-    // 勾选「高级：保留数据」则不清零直接切换（用户自担无法启动风险）。
+    // §8.5 激活冲突对话框（identity/contract/init 重置确认；共享件 ui/components/ResetConfirmDialog）
     resetPrompt?.let { prompt ->
-        var keepData by remember { mutableStateOf(false) }
-        AlertDialog(
-            onDismissRequest = { keepData = false; viewModel.cancelReset() },
-            title = { Text(stringResource(R.string.reset_dialog_title)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.reset_dialog_body, prompt.fromIdentity, prompt.toIdentity))
-                    Spacer(Modifier.height(VmdroidTokens.Spacing.MD))
-                    Text(stringResource(R.string.reset_dialog_deletes))
-                    Spacer(Modifier.height(VmdroidTokens.Spacing.XS))
-                    Text(stringResource(R.string.reset_dialog_keeps))
-                    Spacer(Modifier.height(VmdroidTokens.Spacing.MD))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { keepData = !keepData },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(checked = keepData, onCheckedChange = { keepData = it })
-                        Text(stringResource(R.string.reset_advanced_keep))
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val keep = keepData
-                    keepData = false
-                    viewModel.confirmReset(keep)
-                }) {
-                    Text(
-                        stringResource(
-                            if (keepData) R.string.reset_confirm_keep else R.string.reset_confirm_switch,
-                        ),
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { keepData = false; viewModel.cancelReset() }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
+        ResetConfirmDialog(
+            prompt = prompt,
+            onConfirm = viewModel::confirmReset,
+            onDismiss = viewModel::cancelReset,
         )
     }
 
@@ -270,6 +234,9 @@ fun HomeScreen(
             VmdroidTopBar(
                 title = stringResource(R.string.app_name),
                 actions = {
+                    IconButton(onClick = onNavigateToImages) {
+                        Icon(Icons.Default.Storage, contentDescription = stringResource(R.string.images_title))
+                    }
                     IconButton(onClick = onNavigateToStatus) {
                         Icon(Icons.Default.MonitorHeart, contentDescription = stringResource(R.string.status_page_title))
                     }
