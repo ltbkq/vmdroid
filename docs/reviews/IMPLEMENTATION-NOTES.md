@@ -123,3 +123,18 @@
 **与 R4 并行、但不走 R4 的两件事**：
 - **IMP-T04（Blocker）**：先让 app 模块真正编译一次（装 SDK 或上 CI），否则 M1 退出标准与所有 app 侧结论都不可验证；
 - **BUG-01 / BUG-02 / BUG-03（Major，改代码不改文档）**：登录提示密码 `podroid`、更新检查指向上游仓库、`build-all.sh` 旧包名 —— 三条都是用户/测试直接踩的坑，可独立 PR 快速修掉。
+
+---
+
+## 7. R4 后追加决策记录
+
+### 7.1 镜像体积不作严格限制（2026-10-08，用户决定）
+
+> 原话：「对img镜像文件的大小不需要严格限制」。
+
+- **背景（实测）**：首发 `debian-minimal.img` = **240 MiB**（rootfs squashfs 178 MiB + kernel 20 MiB + initrd 41 MiB），超出冻结文档 G7 / §4.5 / §13.1 / M2 验收所写的 **≤150 MB** 目标约 60%。
+- **决策**：≤150 MB **不作为验收阻塞项**；M2 其余验收项（PC 冒烟 `Ready!` + SSH、包数闭包 ≤260、负面断言、互操作）照旧执行。
+- **冻结文档不动**：`DESIGN.md` 中 5 处 ≤150 MB 条款维持原文；若日后要正式修订，按冻结纪律走变更提案（后续评审轮）。
+- **体积成因留档（已核实，暂不处理）**：
+  1. `rootfs`：`tigervnc-standalone-server` 硬依赖 `libgbm1`→`mesa-libgallium`→`libLLVM19`(117 MB)+`z3`(26 MB)，`pulseaudio` 硬依赖 `libasound2-plugins`→`libavcodec`(ffmpeg ~50 MB)，均为 `--no-install-recommends` 下的**硬 Depends**，不可直接卸载；
+  2. `initrd`（41 MB，解压 135 MB）：上游 Podroid 的 **Alpine 引导环境，内含 podman/netavark/aardvark-dns 容器栈**（~55 MB 解压）——`init` 仅 mount + switch_root，容器栈在 VMDroid 启动流中为死重；其"首发不含容器栈"的负面断言按 §13.1 原文是 **dpkg（rootfs）口径**，不违规。
