@@ -553,6 +553,8 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 
 | `decision` | 条件（按顺序取第一个匹配） | 是否 `RESET_REQUIRED` |
 |---|---|---|
+| `no_active` | 无 `active.json`（**首次激活** / 记录损坏） | **否**（等价 `upgrade`，不重置） |
+| `active_unreadable` | active 记录在但镜像不可读/缺失 | **是**（无法证明 contract 未变 → 按 contract 保守重置） |
 | `same` | `new.rootfs_sha256 == active.rootfs_sha256` | **否**（内容优先，永不重置） |
 | `identity` | `new.identity != active.identity` | 是 |
 | `contract` | `contract.version` 变化（硬判据） | 是 |
@@ -563,7 +565,9 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 2. `identity = manifest.image.identity`（例如 `debian:trixie`，跨版本稳定）；
    **N4 后 identity 恒来自 manifest**（只收 `.img`），不再有 `sha256:` 形式。
 3. **硬判据**：`contract.version` 或 `distro.init` 与当前不同 → 即使 identity 相同也进入 `RESET_REQUIRED`。
-4. 激活时判定为需重置 → 进入 `RESET_REQUIRED`，用户确认后由应用**重建 `storage.img`**（§4.3 整文件清零），再激活。
+4. 激活时判定为需重置 → 进入 `RESET_REQUIRED`，用户确认后由应用**重建 `storage.img`**
+   （§4.3 整文件清零），再激活（**UI 落点 = §8.5 对话框，M3；实现需二次确认门闩
+   `activate(imageId, allowReset)`**，IMP-C10）。
 5. 防御纵深（可选，M6）：`podroid.image_identity=` 加入内核 cmdline；guest 侧比对逻辑
    **由 Podroid-Debian 构建侧新增 `/etc/podroid/identity` + `podroid-migrate` 比对**
    （属镜像内容而非契约改动，故不违反 G4），VMDroid 只负责下发 cmdline。
@@ -572,6 +576,8 @@ manifest 新增（详见 [IMAGE-FORMAT.md](IMAGE-FORMAT.md)）：
 
 - `images/active.json` 记录 `{image_id, identity, rootfs_sha256, activated_at}`
   （字段名与 §2.3 一致；**唯一写者 = `SystemImageRepo`**，R2: A-R2-6/D-R2-7）。
+  写入方 **MUST 只写这 4 个字段**（不写 `path`）；读取方 **MUST 容忍未知字段**
+  （含历史 `path`），多出/缺少非必需字段均不作为拒绝依据；缺 `image_id` 视为无激活记录（IMP-C09）。
 - 允许保留多个已安装镜像（建议上限 2，超出时提示删除最旧的非激活镜像）。
 - 回滚 = 激活另一张已安装镜像（同 identity 无需重置）。
 - v1 不做 A/B 自动回滚（启动失败自动切回），列入 §15 开放问题。
@@ -759,6 +765,7 @@ val tasks = listOf(
 - `.assets_stamp` 机制、原子复制、线程池 **原样保留**。
 - 启动前 `awaitAssetsReady()`（现在只等固件）+ 新增 `awaitImagesReady()`
   （等 `.meta.json` 校验判定完成），两者都完成后才允许 `start()`。
+  （**`awaitImagesReady()` 归 M3**；M1/M2 阶段视为立即完成，IMP-D09。）
 
 ### 7.4 无镜像 / 异常态（BootGuard —— **校验清单权威定义**）
 
@@ -771,7 +778,8 @@ val tasks = listOf(
 |---|---|---|---|
 | 1 | 未安装镜像 | `NO_SYSTEM_IMAGE` | 引导页：**下载推荐镜像** / **从文件导入**；Home 显示 §8.2 空态块，**启动按钮隐藏** |
 | 2 | `.meta.json` 缺失/损坏，或 size/mtime 不一致且全量重算失败 | `CORRUPT` | 阻止启动；UI：重新下载 / 删除重导 |
-| 3 | footer magic 不符 / 裸 squashfs / 非本格式 | `NOT_AN_IMAGE` | 拒绝导入（§5.4 N4），给出 `mkimg.sh` 封装指引 |
+| 3 | 非本格式，或**真**裸 squashfs（offset0=`hsqs`、无 footer、非 `.img` 来源） | `NOT_AN_IMAGE` | 拒绝导入（§5.4 N4），给出 `mkimg.sh` 封装指引 |
+| 3′ | footer magic 不符，但文件 >1 MiB 且 offset0=`hsqs`（被截断/改写的 `.img`） | `CORRUPT` | 拒绝；UI：重新下载 / 删除重导（**不是**"请封装"，IMP-D02） |
 | 4 | `format_version > 1` 或 `footer_size != 4096` 或未知 flags | `FORMAT_UNSUPPORTED` | 拒绝，提示升级应用 |
 | 5 | `app.min_version_code > 当前 versionCode`（catalog 扁平字段 `app_min_version_code` 同义） | `APP_TOO_OLD` | 拒绝激活，提示升级应用 |
 | 6 | `arch != arm64` | `ARCH_MISMATCH` | 拒绝激活 |
@@ -783,6 +791,29 @@ val tasks = listOf(
 
 每次拒绝必须写 `image.log` 的 `bootguard_reject`，`reason` 取本表枚举
 （§16.5 引用本表，勿另造 `NO_IMAGE` 之类别名）。
+
+> **校验时序（IMP-D03 钦定）**：本表只列枚举与行为，**不表示先后**。同一样本命中多条时，
+> `reason` 取**表序下的第一个命中**；解析实现以 IMAGE-FORMAT §5 伪代码顺序为准
+> （§5 顶部已钦定「伪代码顺序 = 唯一权威时序」）。
+>
+> **诊断阶梯（IMP-D02）**：#3 只覆盖"**真**裸 squashfs / 非本格式"。footer magic 不符但
+> 文件 >1 MiB 且 offset0=`hsqs`（被截断/改写的 `.img`）→ **`CORRUPT`**（#3′），
+> **不**提示"请用 `mkimg.sh` 封装"（那会误导用户去封装一个本来就是 `.img` 的坏文件），
+> 由 IMAGE-FORMAT §5 诊断阶梯第一级判定。
+>
+> **codec 级 reason → §7.4 映射子表（IMP-D04）**：`VmdImageCodec` 内部允许比本表更细粒度的
+> reason（`TRUNCATED`/`PAYLOAD_CORRUPT`/`MANIFEST_INVALID`/`IO_ERROR` 等），
+> 但**写入 `image.log` 的 `bootguard_reject.reason` 必须映射到本表枚举**：
+>
+> | codec 内部 reason | 写入 `image.log` 的 §7.4 枚举 |
+> |---|---|
+> | `TRUNCATED` | `CORRUPT` |
+> | `PAYLOAD_CORRUPT` | `CORRUPT` |
+> | `IO_ERROR` | `CORRUPT` |
+> | `MANIFEST_INVALID` | `NOT_AN_IMAGE` |
+> | `FORMAT_*`（过新/尺寸/未知 flags） | `FORMAT_UNSUPPORTED` |
+>
+> "勿另造别名"仅约束 `image.log` 的**写入值**；codec 内部细粒度 reason 允许存在。
 
 ---
 
@@ -1138,7 +1169,9 @@ tools/boot-test.sh ${PKG:-io.github.ltbkq.vmdroid.debug}   # 冒烟（R1: B-R1-8
 一条命令进入 guest。这是 `.img` 的一等验收项（R-16）。
 
 **依赖**：`qemu-system-aarch64`（`apt install qemu-system-arm`，版本下限待 M0 实测）、
-`python3`、`mkfs.ext4`（`e2fsprogs`）、`ssh`。
+`python3`、`mkfs.ext4`（`e2fsprogs`）、`ssh`、`sshpass`（`apt install sshpass` ——
+密码登录的**非交互输入**必需；仅 `ssh -o BatchMode=yes` 只覆盖密钥/agent，无法做
+§13.1 的真登录断言，IMP-D07）。
 
 **归属（R2: C-R2-3/D-R2-2）**：`tools/pc-run.sh` 归 **vmdroid 仓库**（用户入口），
 与 `.img` 一起**随 Podroid-Debian Release 分发**（Release 资产同时挂脚本，用户两条命令拿到全部）；
@@ -1196,8 +1229,14 @@ qemu-system-aarch64 \
 | 启动契约 | 挂载与标记路径**相同**：`init-podroid` 挂 `vda`/`vdb` → overlay → `Ready!` |
 | 架构 | x86_64 PC 走 **TCG**（慢但可用）；arm64 Linux 主机可加 `-accel kvm -cpu host` 提速 |
 | 端口 | 只绑回环 `127.0.0.1`（9922/5900/4713 三者齐全，与 §4.8 一致）；`ssh -p 9922 ltbkq@localhost`（pw `123`） |
+| 端口冲突 | 启动前预检 9922/5900/4713，被占 → 打印占用进程并**明确失败**（不静默重试/不假成功）；启动前清理 run-dir 陈旧 `*.sock`（否则 QEMU `Failed to bind`，IMP-C07） |
 | 阈值 | **90s 内出现 `Ready!`**（与 `boot-test.sh BOOT_TIMEOUT=90` 对齐；原 60s 无实测依据，M0 spike 实测后可再收紧，R2: B-R2-9） |
 | 不承诺 | PC 端**不做**图形前端、不做 USB/9p 透传；`:5900` 可连但需自备 viewer |
+
+> **monitor 不可交互（IMP-C08）**：`pc-run.sh` 前台/后台模式下 monitor 与 console 同流
+> （`-serial mon:stdio` 且 stdout → `console.log`），monitor **不可交互**（`Ctrl-a c` 无处可按）。
+> 需要 monitor 时用 `--dry-run` 取 argv 后手工把 `-serial mon:stdio` 换成
+> `-serial file:console.log -monitor unix:<run>/monitor.sock`（或经 QMP socket）。
 
 **验收（R-16）**：`tools/pc-run.sh debian.img` 在 x86_64 Ubuntu/Debian 上 **90 秒内**输出 `Ready!`，
 且 `ssh -p 9922 ltbkq@127.0.0.1`（pw `123`）成功 —— 两条断言**都必须进 CI**（`pc-boot-smoke.sh`）。
@@ -1277,9 +1316,9 @@ qemu-system-aarch64 \
 | 层 | 内容 | 归属 |
 |---|---|---|
 | 构建产物 | **APK 体积 ≤ 80 MB（CI 硬断言；G1 目标 ≈70 MB，+10 MB 为余量，R3: A-R3-20/C-R3-11）**；资产清单仅 `vmlinuz-virt`/`initrd.img`/`qemu/`（≈20 MB）、**无 `*.squashfs`**（G1/R-01） | vmdroid CI |
-| **PC 冒烟（R-16）** | `mkimg` 自检：提取 `.img` 内 kernel/initrd → 起 `qemu-system-aarch64` **90s** 内断言 `Ready!` **且** `ssh -p 9922` 可登录（`pc-boot-smoke.sh` = `pc-run.sh --smoke`） | Podroid-Debian CI |
+| **PC 冒烟（R-16）** | `mkimg` 自检：提取 `.img` 内 kernel/initrd → 起 `qemu-system-aarch64` **90s** 内断言 `Ready!` **且** `ssh -p 9922` 可登录（`pc-boot-smoke.sh` = `pc-run.sh --smoke`）。**`ssh` 断言必须是真登录（密码或密钥）；仅端口探活 = 该断言不通过（记 warning 且冒烟判 FAIL，IMP-D07）** | Podroid-Debian CI |
 | 单元（JVM） | `VmdImageCodec`：往返编解码、footer 定位、字段缺省、截断/损坏/错位/越界拒绝、`ssh_port≠22` 拒绝；identity 判据全表（§5.2 含内容优先与硬判据）；状态机迁移；流式 sha256 | vmdroid |
-| 工具侧 | `mkimg.sh` ↔ Kotlin codec **互操作**；测试向量入库；catalog schema 前向兼容（未知字段/新 image 条目） | vmdroid + Podroid-Debian |
+| 工具侧 | `mkimg.sh` ↔ Kotlin codec **互操作**；测试向量入库；catalog schema 前向兼容（未知字段/新 image 条目）。**互操作必须包含负向断言（IMP-T01）**：kernel/initrd 单字节翻转 → `read()` 可**通过**（§3 规则 7 允许延迟），**`verifyPayloads()` 必须拒绝**（`PAYLOAD_CORRUPT`）；反向：`mkimg` 产物 `read()`+`verifyPayloads()` 全通过 | vmdroid + Podroid-Debian |
 | 下载 | Range 续传（含 416 回退）、ETag 变化重下、`.part` 断点恢复、校验失败清理 | vmdroid |
 | 镜像内容 | 镜像检查脚本：`getent passwd ltbkq`、`visudo -c`、dropbear 允许 root 与密码登录、**两账户凭密码 `123` 可认证**（`openssl passwd -6 123` 比对 shadow 或直接以登录成功为真值）、`ss -tln` 断言 guest **:22**、`/etc/dropbear/` **无** `*_host_key` 私钥 | Podroid-Debian CI |
 | 最小化负面断言 | dpkg **不含** `docker.io/podman/lxc/xfce4/lightdm`；包数 **≤260**（目标 210–250）；`.img ≤ 150 MB` | Podroid-Debian CI |
@@ -1338,7 +1377,7 @@ qemu-system-aarch64 \
 | **M0** 规格冻结 | 本设计评审（R1–R3）+ P0 spike（§13.3）+ B-R1-17 占用决策 | spike 结论：direct 可行 / 需 fallback-split 及其占用方案 | 1–2 天 |
 | **M1** 骨架 | fork 上游 → 改名/包名/品牌 → 移除 rootfs 资产 → §8.0 设计系统落点（主题/token/间距常量 + **Home 页四态**；全站四态审计归 M6）→ **§16 基础日志**（`VmdLog`：启动前轮转 `boots/` + `boot_id` + 阶段打点 + `meta.json`，L1/L2 修复） | APK ≈70 MB 可安装；`images/` 为空时进 Setup 占位 + 启动按钮隐藏（**BootGuard 简版：仅 ABSENT 判定**，完整校验归 M3，R2: D-R2-4）；**连续 2 次启动历史不丢** | 3–4 天 |
 | **M2** 格式与工具 | **vmdroid**：`VmdImageCodec` + 测试向量消费；**Podroid-Debian**：`mkimg.sh`（`--kernel/--initrd`）、`manifest.json`、**`packages-minimal.list` + 首个 `out/debian.img`**、账户规范（§4.8 含 host key 首启生成）、`pc-run.sh`/`pc-boot-smoke.sh`、`graft.sh` 废除、`boot-test.sh` 参数化、**journald 64MB 限额 drop-in（§16.6）** | 互操作测试通过；**R-16 PC 冒烟 `Ready!` + ssh**；镜像 ≤150 MB、包数 ≤260、负面断言通过 | 4–5 天（R2: D-R2-3/D-R2-14 建议拆 M2a/M2b） |
-| **M3** 镜像管理 | 导入/校验/激活/删除/BootGuard/identity 判据 + **§8.2 启动镜像选择控件** + **`image.log`（§16.5，L3 修复）** | §13.2 中"导入/E2E 换系统/损坏/identity"用例通过 + `activate.decision` 有记录 | 3–4 天 |
+| **M3** 镜像管理 | 导入/校验/激活/删除/BootGuard/identity 判据 + **§8.2 启动镜像选择控件** + **§8.5 激活冲突对话框与 `activate(allowReset)` 接线（IMP-C10）** + **`awaitImagesReady()`（IMP-D09）** + **`image.log`（§16.5，L3 修复）** | §13.2 中"导入/E2E 换系统/损坏/identity"用例通过 + `activate.decision` 有记录 | 3–4 天 |
 | **M4** 下载 | 目录 + 断点续传 + 通知进度 + §8.3 镜像页 + 下载事件入 `image.log` | 60% 杀进程续传用例通过 | 2–3 天 |
 | **M5** 恢复出厂 | **清零重建** `storage.img`（guest 自动 mkfs，§4.3）；无需种子提取 | Reset 与"恢复出厂"行为正确、全零盘首启格式化成功 | 1 天 |
 | **M6** 回归 | 真机双后端矩阵 + 契约指纹回归 + guest identity 守卫（可选）+ **诊断 UI + 导出 zip 扩展（§16.4/§16.8）** + 全站四态审计 | §13.2 全绿（含 §16 日志用例） | 3 天 |
@@ -1508,10 +1547,10 @@ VmdroidService.start()  （BootGuard 通过后、engine.start() 之前）
 | `download_start` / `download_progress` / `download_done` / `download_fail` | §6.2 | `bytes`、`resume`（是否续传）、`err` |
 | `import_start` / `import_done` / `import_fail` | §6.3 | `src_uri`、`bytes`、`err` |
 | `verify_ok` / `verify_fail` | §6.4 | `sha256`、`fail`（footer/manifest/段 sha 之一） |
-| `activate` | §5.3 | `from`、`to`、`decision`（枚举见 §5.2 表：`same`/`upgrade`/`identity`/`contract`/`init`）、`reset`（bool） |
+| `activate` | §5.3 | `from`、`to`、`decision`（枚举见 §5.2 表：`no_active`/`active_unreadable`/`same`/`upgrade`/`identity`/`contract`/`init`）、`reset`（bool） |
 | `factory_reset` | §4.3 | `old_size`、`new_size`、`method`（`whole-file-zero`） |
 | `install_delete` | §5.3 | `image` |
-| `bootguard_reject` | §7.4 | `reason`（**枚举 = §7.4 权威清单**：`NO_SYSTEM_IMAGE`/`CORRUPT`/`APP_TOO_OLD`/`ARCH`/`SSH_PORT`/…，R3: A-R3-16 统一） |
+| `bootguard_reject` | §7.4 | `reason`（**枚举 = §7.4 权威清单**：`NO_SYSTEM_IMAGE`/`CORRUPT`/`APP_TOO_OLD`/`ARCH_MISMATCH`/`SSH_PORT_INVALID`/…，R3: A-R3-16 统一） |
 
 **节流**：`download_progress` 每 5% 或 4 MB 记一行（§16.9），其余事件必记。
 

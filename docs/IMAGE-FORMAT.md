@@ -110,11 +110,13 @@ offset
 **footer 解析规则**
 
 1. 先判断 `file_size ≥ 4096`；读最后 4096 字节 → 校验 `magic`/`magic_tail`。
-   - 魔数不匹配 → 走拒绝分支（N4：裸 squashfs 提示封装；否则"非本格式"）。
+   - 魔数不匹配 → 走 §5 诊断阶梯（三级：坏 `.img` → `CORRUPT`；纯 squashfs → `NOT_AN_IMAGE`；
+     其余 → `NOT_AN_IMAGE`）。
    - 魔数匹配才检查 `file_size < 8192 → 拒绝`（避免误杀极小合法文件，R1: B-R1-11）。
 2. 校验 `footer_size == 4096`、`format_version ≤ 1`、
    `flags 保留位为 0`（**合法位 = bit0|bit1，掩码 `0x3`**；R2: A-R2-1/B-R2-1/C-R2-1）。
-3. 校验 `file_size == <实际文件大小>`（否则 = 截断/拼接，拒绝）。
+3. 校验 `file_size == <实际文件大小>`（否则 = 追加/拼接/尾字节被改，拒绝 → `CORRUPT`；
+   **纯截断由规则 1 的 magic 校验先拦截**，本规则针对 footer 完好但文件被追加的情形，IMP-D01）。
 4. **flags ↔ 段一致性**（R2: B-R2-6/C-R2-2）：
    `bit0` 置位 ⇔ `kernel_size > 0`；`bit1` 置位 ⇔ `initrd_size > 0`；
    未置位时对应 `*_offset`/`*_size` 必须为 0 —— 任一不符按损坏拒绝。
@@ -210,10 +212,15 @@ offset
 - 未知字段**必须忽略**（前向兼容），不得拒绝解析。
 - 缺省解释（`.img` 均带 manifest，此处理论兜底）：
   - 无 `capabilities` → `{ssh:true, x11:true, containers:true}`（对齐上游全量镜像）
+  - **有 `capabilities` 块但缺 `ssh` 键** → 视为 `false`（fail-closed，按 §7.4 #8
+    `SSH_CAPABILITY_MISSING` 拒绝）
   - 无 `accounts` → 仅 `root`、`ssh_port = 22`
   - 无 `contract` → 视为 `contract.version = 1`
+  - **无 `app` 块** → 视为 `min_version_code = 0`（**不拒绝**）
 - `capabilities.ssh` 若为 `false` → 镜像不合格，`mkimg` 与应用均拒绝（SSH 是硬性要求）。
-- `accounts.ssh_port` **缺省 22；≠ 22 一律拒绝**（DESIGN §4.8 端口规范）。
+- `accounts.ssh_port` **缺省 22；≠ 22 一律拒绝**（DESIGN §4.8 端口规范）；
+  **类型非整数（字符串/浮点/`null`）→ 视为 ≠ 22 → `SSH_PORT_INVALID`**
+  （fail-closed，不做字符串到数字的宽松转换）。
 - **重置判定（DESIGN §5.2，三步）**：
   1. `rootfs_sha256` 相同 → 同一系统，**永不重置**（内容优先）；
   2. `identity` 不同 → `RESET_REQUIRED`；
@@ -225,21 +232,32 @@ offset
 
 ## 5. 读取算法（应用侧伪代码）
 
+> **校验时序（IMP-D03）**：本伪代码顺序是**唯一权威时序**；§3 规则编号仅为清单，
+> 不表示先后。同一样本命中多条失败时，`reason` 取**本伪代码顺序下的第一个命中**
+> （`reason` 枚举权威定义见 DESIGN §7.4）。
+
 ```
 open(file) -> size
-if size < 4096: reject("too small")
+if size < 4096: reject("too small")                       # → CORRUPT
 seek(size - 4096); read 4096 bytes as footer
 if footer.magic != "VMDIMG01" or footer.magic_tail != "VMDIMG01":
-    -> 读 offset0：若为 "hsqs" → reject("裸 squashfs，需用 mkimg.sh 封装为 .img")
-    -> 否则 reject("非 VMDroid 系统镜像")        # N4：不接受任何非 .img 输入
-if footer.file_size != size: reject("truncated")
-if footer.format_version > 1: reject("format too new, update app")
-if footer.footer_size != 4096: reject("bad footer")
+    # ★ 诊断阶梯（IMP-D02）：先判"是否本应是 .img 但 footer 坏"，再判"真裸 squashfs"
+    -> 读 offset0；若文件 > 1 MiB 且 offset0 == "hsqs":
+         reject("footer 缺失或损坏（文件可能是被截断/改写的 .img）")   # → CORRUPT
+    -> 否则若为纯 squashfs（≤ 1 MiB 或来自 `.squashfs` 源）:
+         reject("裸 squashfs，需用 mkimg.sh 封装为 .img")              # → NOT_AN_IMAGE
+    -> 否则 reject("非 VMDroid 系统镜像")        # N4：不接受任何非 .img 输入 → NOT_AN_IMAGE
+if footer.file_size != size: reject("truncated")           # → CORRUPT
+if footer.format_version > 1: reject("format too new, update app")   # → FORMAT_UNSUPPORTED
+if footer.footer_size != 4096: reject("bad footer")        # → FORMAT_UNSUPPORTED
 # ★ 合法 flags = bit0(KERNEL)|bit1(INITRD)，掩码 0x3（v1 无 seed；R2 Blocker 修复）
 if footer.flags & ~0x3: reject("unknown flags")
 # ★ flags ↔ 段一致性
 if (footer.flags & 0x1) != (footer.kernel_size > 0): reject("flags/kernel mismatch")
 if (footer.flags & 0x2) != (footer.initrd_size > 0): reject("flags/initrd mismatch")
+# ★ 长度合法性（IMP-C05）：rootfs 必须非空；manifest 必须落在 [1, 65536]（§2）
+if footer.rootfs_size == 0: reject("rootfs size zero")         # → CORRUPT
+if not (1 <= manifest_size <= 65536): reject("manifest size out of range")  # → CORRUPT
 # ★ 边界/溢出校验：每段 [offset, offset+size) ⊆ [0, file_size-4096)
 for seg in [rootfs, kernel(if bit0), initrd(if bit1)]:
     if seg.offset > MAX-seg.size or seg.offset+seg.size > file_size-4096: reject("segment out of range")
@@ -260,6 +278,12 @@ activePath = file            # direct 模式（零拷贝直挂为 vdb）
 
 > 上述加法运算须用**溢出安全**比较（`a > MAX - b` 而非 `a + b > MAX`）。
 > `file_size < 8192` 的拒绝只在 footer magic 匹配后才执行，避免误杀（R1: B-R1-11）。
+>
+> **读取方校验范围（IMP-C01 钦定）**：§2 的 1 MiB 段对齐、`kernel_size==0||≥1MiB`、
+> `initrd_size==0||≥4096`、`reserved` 全零、squashfs 内部一致性**属生成侧约束**
+> （§6/§8 覆盖）；读取方 **MUST NOT** 因此拒绝，MAY 记 warning。
+> 读取方只校验本节列出的边界/顺序/魔数/哈希（对齐 Kotlin codec 现状：
+> 故意不查对齐，避免拒收非 `mkimg` 生成的合法镜像）。
 
 **校验时机**
 
@@ -280,21 +304,37 @@ tools/mkimg.sh \
     --manifest manifest.json \
     --kernel  out/vmlinuz-virt \      # ★ R-16：写入 kernel payload
     --initrd  out/initrd.img \        # ★ R-16：写入 initrd payload
+    [--smoke | --no-smoke] \          # ★ 自检模式（IMP-C03）
     -o out/debian.img
 # v1 无 --seed（决策 2026-10-08 移除）；恢复出厂见 DESIGN §4.3
 ```
 
 步骤：
 
-1. 读 `rootfs` 大小 `R`（取 `superblock.bytes_used`，**丢弃**补齐至 4096 边界的尾部字节，
+1. 读 `rootfs` 大小 `R`（取 squashfs superblock 的 `bytes_used`，位于偏移 **0x28，u64 小端**
+   —— 等价于 `unsquashfs -s` 的 `Filesystem size`；**丢弃**补齐至 4096 边界的尾部字节，
    本例 `bytes_used`→文件尾 383 B；R1: B-R1-9），算 `rootfs_sha256`。
 2. 计算各段 1 MiB 对齐偏移；依次读取 kernel?/initrd? 并各算 sha256。
 3. 写 manifest JSON（UTF-8）→ 算 `manifest_sha256`。
+   **派生字段覆写（IMP-C02）**：`mkimg` **MUST** 用 footer 值覆写
+   `checksums.rootfs_sha256` / `boot.kernel_sha256` / `boot.initrd_sha256` /
+   `contract.kernel.image_sha256`（manifest 内同名字段仅为镜像内提示，供工具读取）；
+   读取方以 **footer** 为准，manifest 与 footer 不一致 → **不拒绝**，记 warning。
 4. 顺序写出：`rootfs` → 填充 → `kernel?` → 填充 → `initrd?`
    → 填充 → `manifest` → 填充（4 KiB 对齐）→ `footer`。
 5. `fsync`；输出全文件 sha256 + 体积，供 catalog 使用。
-6. **自检**：① 同一解析器回读；② 若含 kernel/initrd → 自动跑 `pc-boot-smoke.sh`
+6. **自检**：① 同一解析器回读；② 若含 kernel/initrd → 跑 `pc-boot-smoke.sh`
    （起 QEMU **90s**，断言出现 `Ready!` 且 `ssh -p 9922` 可登录，见 DESIGN §13.2 R-16 用例）。
+   **降级语义（IMP-C03）**：默认 `auto` —— 有 kernel/initrd payload 且
+   `pc-boot-smoke.sh` + `qemu-system-aarch64` + `IMG_BOOT_LIB` 齐备 → 跑；缺任一 →
+   `warn` 后跳过（构建仍成功）。`--smoke`：强制，缺工具 `exit 3`；`--no-smoke`：跳过
+   （测试向量用）。CI 一律用 `--smoke`，禁止依赖 `auto` 的静默降级；`flags==0`（无 payload）不跑。
+
+**必需字段表（IMP-D05，生成侧）**：`mkimg` 拒绝缺以下任一字段的 manifest：
+`image.id` / `image.display_name` / `image.identity` / `image.variant` /
+`image.version` / `image.system_version` / `image.arch`、`contract.version`、
+`capabilities.ssh`、`accounts.ssh_port`、`app.min_version_code`。
+（读取侧缺省解释见 §4；口径不同：**mkimg 生成从严，读取侧向前兼容兜底**。）
 
 **注意**：现有 `Podroid-Debian/out/debian-rootfs.squashfs` **无需重建**，
 `mkimg` 只是在尾部追加（秒级完成）。
@@ -321,7 +361,8 @@ tools/mkimg.sh \
 | 合法最小镜像（rootfs + manifest，无 kernel/initrd） | 解析成功，payload 校验通过，`flags == 0` |
 | 含 kernel+initrd 的镜像 | `flags == 0x3`；`kernel/initrd` 偏移 1 MiB 对齐、长度与 sha256 与源文件逐字节一致 |
 | 尾部 4 KiB 覆写 | `magic` 校验失败 → 拒绝 |
-| 文件截断 1 字节 | `footer.file_size != size` → 拒绝 |
+| 文件截断 1 字节 | 拒绝（**双 magic 先失败 → `NOT_AN_IMAGE`**，走 §5 诊断阶梯；IMP-D01） |
+| footer 完好但尾字节被改 / 文件被追加 | `footer.file_size != size` → 拒绝（`CORRUPT`；IMP-D01） |
 | manifest 单字节翻转 | `manifest_sha256` 不匹配 → 拒绝 |
 | `arch != arm64` | 拒绝激活 |
 | `capabilities.ssh == false` | 拒绝（违反 DESIGN §4.8） |
