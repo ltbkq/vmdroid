@@ -5,8 +5,10 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,20 +22,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.windowsizeclass.WindowHeightSizeClass
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.runtime.Composable
@@ -128,6 +138,8 @@ fun HomeScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 phoneIp = viewModel.phoneIp()
                 permissionsGrantVersion++
+                // §8.2：回到前台重读 images/（外部导入/删除、别处激活的同步）
+                viewModel.refreshImages()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -149,6 +161,30 @@ fun HomeScreen(
         when (permission) {
             AppPermission.NOTIFICATIONS -> notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             AppPermission.BATTERY_OPTIMIZATION -> AppPermissions.requestBatteryOptimizationExemption(context)
+        }
+    }
+
+    // ---- §8.2 启动镜像选择（状态 + 入口） ----
+    val imageState by viewModel.images.collectAsStateWithLifecycle()
+    val resetPrompt by viewModel.resetPrompt.collectAsStateWithLifecycle()
+
+    // §6.3 SAF 导入：选任意文件（content:// 流交给 install() 校验；非 .img 由
+    // codec 拒绝并给出 mkimg 封装指引 —— §13.2「导入非 .img」用例）
+    val importLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        uri?.let(viewModel::importImage)
+    }
+
+    // §6.1 下载入口：M4 应用内断点续传落地前，先用浏览器打开 Release 页
+    // （catalog.json 与镜像资产同处发布）；下载完成后走「从文件导入」。
+    fun openCatalog() {
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(CATALOG_RELEASES_URL)))
+        }.onFailure {
+            android.widget.Toast.makeText(
+                context,
+                context.getString(R.string.image_err_generic, it.message),
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
         }
     }
 
@@ -177,6 +213,54 @@ fun HomeScreen(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissUpdate() }) { Text(stringResource(R.string.later)) }
+            },
+        )
+    }
+
+    // §8.5 激活冲突对话框（identity/contract/init 重置确认）：
+    // 默认「重置并切换」= 清零 storage.img → activate(allowReset=true)；
+    // 勾选「高级：保留数据」则不清零直接切换（用户自担无法启动风险）。
+    resetPrompt?.let { prompt ->
+        var keepData by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { keepData = false; viewModel.cancelReset() },
+            title = { Text(stringResource(R.string.reset_dialog_title)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.reset_dialog_body, prompt.fromIdentity, prompt.toIdentity))
+                    Spacer(Modifier.height(VmdroidTokens.Spacing.MD))
+                    Text(stringResource(R.string.reset_dialog_deletes))
+                    Spacer(Modifier.height(VmdroidTokens.Spacing.XS))
+                    Text(stringResource(R.string.reset_dialog_keeps))
+                    Spacer(Modifier.height(VmdroidTokens.Spacing.MD))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { keepData = !keepData },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = keepData, onCheckedChange = { keepData = it })
+                        Text(stringResource(R.string.reset_advanced_keep))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val keep = keepData
+                    keepData = false
+                    viewModel.confirmReset(keep)
+                }) {
+                    Text(
+                        stringResource(
+                            if (keepData) R.string.reset_confirm_keep else R.string.reset_confirm_switch,
+                        ),
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { keepData = false; viewModel.cancelReset() }) {
+                    Text(stringResource(R.string.cancel))
+                }
             },
         )
     }
@@ -252,17 +336,27 @@ fun HomeScreen(
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
                     ) {
+                        BootImageSelector(
+                            state = imageState,
+                            running = isRunning || isStarting || isStopping,
+                            onSelect = viewModel::onImageSelected,
+                            onImport = { importLauncher.launch(arrayOf("*/*")) },
+                            onDownload = { openCatalog() },
+                        )
                         HomeActionButtons(
                             isRunning = isRunning,
                             isStarting = isStarting,
                             isStopping = isStopping,
                             vmState = vmState,
+                            startMode = startButtonMode(imageState),
                             onStart = { viewModel.startVmdroid() },
                             onStop = { viewModel.stopVm() },
                             onRestart = { viewModel.restartVm() },
                             onOpenTerminal = onNavigateToTerminal,
                             onBackup = onNavigateToContainerBackup,
                             onStatus = onNavigateToStatus,
+                            onReverify = viewModel::reverifyImage,
+                            onRedownload = { openCatalog() },
                         )
                     }
                 }
@@ -306,17 +400,27 @@ fun HomeScreen(
                     )
                     HomeDataSection(isRunning, isStopping, vmState, meta, phoneIp, containerCount)
                     Spacer(Modifier.weight(1f))
+                    BootImageSelector(
+                        state = imageState,
+                        running = isRunning || isStarting || isStopping,
+                        onSelect = viewModel::onImageSelected,
+                        onImport = { importLauncher.launch(arrayOf("*/*")) },
+                        onDownload = { openCatalog() },
+                    )
                     HomeActionButtons(
                         isRunning = isRunning,
                         isStarting = isStarting,
                         isStopping = isStopping,
                         vmState = vmState,
+                        startMode = startButtonMode(imageState),
                         onStart = { viewModel.startVmdroid() },
                         onStop = { viewModel.stopVm() },
                         onRestart = { viewModel.restartVm() },
                         onOpenTerminal = onNavigateToTerminal,
                         onBackup = onNavigateToContainerBackup,
                         onStatus = onNavigateToStatus,
+                        onReverify = viewModel::reverifyImage,
+                        onRedownload = { openCatalog() },
                     )
                     Spacer(Modifier.height(VmdroidTokens.Spacing.XL))
                 }
@@ -626,12 +730,16 @@ private fun HomeActionButtons(
     isStarting: Boolean,
     isStopping: Boolean,
     vmState: VmState,
+    /** §8.2 驱动的启动按钮形态（仅停止态分支生效）。 */
+    startMode: StartButtonMode,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRestart: () -> Unit,
     onOpenTerminal: () -> Unit,
     onBackup: () -> Unit,
     onStatus: () -> Unit,
+    onReverify: () -> Unit,
+    onRedownload: () -> Unit,
 ) {
     if (isStopping) {
         // Teardown in progress: one disabled affordance so the user can't
@@ -653,6 +761,16 @@ private fun HomeActionButtons(
         }
     } else if (isStarting) {
         VmdroidDestructiveButton(text = stringResource(R.string.stop), onClick = onStop)
+    } else if (startMode == StartButtonMode.HIDDEN) {
+        // §8.2 完全无镜像：隐藏启动按钮（不显示必然失败的按钮），保留快捷入口。
+        HomeQuickActions(onBackup = onBackup, onStatus = onStatus)
+    } else if (startMode == StartButtonMode.REVERIFY) {
+        // §8.2 CORRUPT：主按钮变「重新校验 / 重新下载」（校验通过后恢复启动）。
+        VmdroidPrimaryButton(text = stringResource(R.string.image_reverify), onClick = onReverify)
+        Spacer(Modifier.height(VmdroidTokens.Spacing.SM))
+        VmdroidGhostButton(text = stringResource(R.string.image_redownload), onClick = onRedownload)
+        Spacer(Modifier.height(VmdroidTokens.Spacing.SM))
+        HomeQuickActions(onBackup = onBackup, onStatus = onStatus)
     } else if (vmState is VmState.Error) {
         VmdroidPrimaryButton(text = stringResource(R.string.try_again), onClick = onStart)
         Spacer(Modifier.height(VmdroidTokens.Spacing.SM))
@@ -683,5 +801,266 @@ private fun HomeQuickActions(
             onClick = onStatus,
             modifier = Modifier.weight(1f),
         )
+    }
+}
+
+/**
+ * §8.2 启动镜像选择控件（Home 页、启动按钮上方）。
+ *
+ * 行为表八态：运行中禁用并说明 / 判据相同直切 / 需重置弹 §8.5 / 仅 1 镜像仍显示
+ * （下拉含导入、下载入口）/ 校验中 spinner + 文字 / CORRUPT 三重编码（error 色 +
+ * ⚠ + 文字）/ 空态双入口（启动按钮随 [StartButtonMode.HIDDEN] 隐藏）/
+ * 加载失败保留上次值 + 顶部 inline error。
+ */
+@Composable
+private fun BootImageSelector(
+    state: HomeImageState,
+    running: Boolean,
+    onSelect: (String) -> Unit,
+    onImport: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM)) {
+        VmdroidSectionLabel(stringResource(R.string.boot_image_label))
+
+        when (state) {
+            is HomeImageState.Loading -> {
+                // 初始读取中：占位禁用字段（布局与就绪态同高，不塌陷）
+                OutlinedTextField(
+                    value = stringResource(R.string.boot_image_placeholder),
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            is HomeImageState.Loaded -> {
+                if (state.loadFailed) {
+                    // §8.2「加载失败」：顶部 inline error，选择器保留上次值
+                    Text(
+                        text = stringResource(R.string.image_list_load_failed),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+
+                if (state.isEmpty) {
+                    // §8.2 空态：整块替换为双入口（启动按钮由 HomeActionButtons 隐藏）
+                    Card(colors = CardDefaults.outlinedCardColors()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(VmdroidTokens.Spacing.LG),
+                            verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.MD),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                )
+                                Text(
+                                    stringResource(R.string.boot_image_empty_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            }
+                            VmdroidPrimaryButton(
+                                text = stringResource(R.string.image_download_first),
+                                onClick = onDownload,
+                            )
+                            TextButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
+                                Text(stringResource(R.string.image_import_entry))
+                            }
+                        }
+                    }
+                } else {
+                    BootImageDropdown(
+                        state = state,
+                        running = running,
+                        onSelect = onSelect,
+                        onImport = onImport,
+                        onDownload = onDownload,
+                    )
+                    // 字段下方：常规 = line2（image_id · 体积）；损坏 = 三重编码行
+                    val displayed = state.row(state.displayedId)
+                    if (displayed != null) {
+                        if (state.displayedCorrupt) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.XS),
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    text = "${displayed.line2} · ${stringResource(R.string.image_corrupt)}",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = displayed.line2,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+
+                // 一次性提示（激活 / 导入 / 校验结果），下一次动作前由 VM 清空
+                state.message?.let { msg ->
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** §8.2 下拉选择器（Material 3 `ExposedDropdownMenuBox`：一眼看出当前跑哪个系统）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BootImageDropdown(
+    state: HomeImageState.Loaded,
+    running: Boolean,
+    onSelect: (String) -> Unit,
+    onImport: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val checking = state.checkingId != null
+    val enabled = !running && !checking
+    val displayed = state.row(state.displayedId)
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = it },
+    ) {
+        OutlinedTextField(
+            value = displayed?.line1 ?: stringResource(R.string.boot_image_placeholder),
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            isError = displayed?.corrupt == true,
+            colors = if (displayed?.corrupt == true) {
+                TextFieldDefaults.colors(
+                    focusedTextColor = MaterialTheme.colorScheme.error,
+                    unfocusedTextColor = MaterialTheme.colorScheme.error,
+                )
+            } else {
+                TextFieldDefaults.colors()
+            },
+            trailingIcon = {
+                if (checking) {
+                    // §8.2「校验中」：20dp spinner（文字在 supportingText）
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                }
+            },
+            supportingText = if (checking || running) {
+                {
+                    Text(
+                        stringResource(
+                            if (checking) R.string.boot_image_checking else R.string.boot_image_running_hint,
+                        ),
+                    )
+                }
+            } else {
+                null
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+        )
+
+        if (enabled) {
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                state.rows.forEach { row ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.XS),
+                                ) {
+                                    if (row.corrupt) {
+                                        Icon(
+                                            Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                    Text(
+                                        text = row.line1,
+                                        color = if (row.corrupt) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                }
+                                Text(
+                                    text = row.line2,
+                                    color = if (row.corrupt) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                if (row.corrupt) {
+                                    Text(
+                                        text = stringResource(R.string.image_corrupt),
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
+                                }
+                            }
+                        },
+                        trailingIcon = if (row.imageId == state.displayedId) {
+                            { Icon(Icons.Default.Check, contentDescription = null) }
+                        } else {
+                            null
+                        },
+                        onClick = {
+                            expanded = false
+                            onSelect(row.imageId)
+                        },
+                    )
+                }
+                // 导入 / 下载入口常驻（§8.2「仅 1 个镜像」行：仍显示 + 下拉项含入口）
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.image_import_entry)) },
+                    onClick = {
+                        expanded = false
+                        onImport()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.image_download_more)) },
+                    onClick = {
+                        expanded = false
+                        onDownload()
+                    },
+                )
+            }
+        }
     }
 }

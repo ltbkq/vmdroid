@@ -343,4 +343,38 @@
     <string name="avf_action_switch_qemu">Switch to QEMU</string>
     <string name="avf_action_retry">Retry</string>
     <string name="avf_net_workaround_failed">A compatibility step needed for AVF networking failed on this device. Linux may start without network access. If so, switch the backend to QEMU.</string>
+
+    <!-- Boot image selector (§8.2) -->
+    <string name="boot_image_label">Boot image</string>
+    <string name="boot_image_placeholder">Select a system image</string>
+    <string name="boot_image_checking">Verifying…</string>
+    <string name="boot_image_running_hint">Stop the VM before switching images</string>
+    <string name="boot_image_empty_title">No system image installed</string>
+    <string name="image_download_first">Download debian.img</string>
+    <string name="image_import_entry">Import .img from file</string>
+    <string name="image_download_more">Download more images online…</string>
+    <string name="image_corrupt">Corrupt</string>
+    <string name="image_list_load_failed">Couldn\'t load the image list.</string>
+    <string name="image_activated_next_boot">Activated — takes effect on next start</string>
+    <string name="image_reverify">Verify again</string>
+    <string name="image_redownload">Download again</string>
+    <string name="image_imported">Imported %1$s</string>
+    <string name="image_verify_ok">Verification passed</string>
+    <string name="image_verify_failed">Verification failed — the image is corrupt</string>
+    <string name="image_err_not_an_image">Not a VMDroid .img — pack one with Podroid-Debian tools/mkimg.sh (see the project README).</string>
+    <string name="image_err_corrupt">The image is corrupt. Verify again or re-download it.</string>
+    <string name="image_err_format">This image\'s format is too new for the current app version.</string>
+    <string name="image_err_arch">This image\'s architecture doesn\'t match this device.</string>
+    <string name="image_err_app_old">This image requires a newer version of the app.</string>
+    <string name="image_err_missing">The image file is missing — import it again.</string>
+    <string name="image_err_generic">Image operation failed: %1$s</string>
+
+    <!-- Activation reset dialog (§8.5) -->
+    <string name="reset_dialog_title">Reset VM data?</string>
+    <string name="reset_dialog_body">The target image differs from the current system (%1$s → %2$s). To stay bootable, the VM data disk storage.img must be wiped.</string>
+    <string name="reset_dialog_deletes">Will delete: container data, installed apt/apk packages, /root contents</string>
+    <string name="reset_dialog_keeps">Won\'t delete: downloaded system images</string>
+    <string name="reset_confirm_switch">Reset &amp; switch</string>
+    <string name="reset_confirm_keep">Switch (keep data)</string>
+    <string name="reset_advanced_keep">Advanced: keep data (may not boot)</string>
 </resources>

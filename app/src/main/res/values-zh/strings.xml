@@ -344,4 +344,38 @@
     <string name="avf_action_switch_qemu">切换至 QEMU</string>
     <string name="avf_action_retry">重试</string>
     <string name="avf_net_workaround_failed">此设备上 AVF 联网所需的兼容性设置失败，Linux 系统启动后可能没有网络连接。如果网络不可用，请将后端切换至 QEMU。</string>
+
+    <!-- 启动镜像选择控件（§8.2） -->
+    <string name="boot_image_label">启动镜像</string>
+    <string name="boot_image_placeholder">选择系统镜像</string>
+    <string name="boot_image_checking">校验中</string>
+    <string name="boot_image_running_hint">请先停止虚拟机再切换镜像</string>
+    <string name="boot_image_empty_title">尚未安装系统镜像</string>
+    <string name="image_download_first">下载 debian.img</string>
+    <string name="image_import_entry">从文件导入 .img</string>
+    <string name="image_download_more">在线下载更多镜像…</string>
+    <string name="image_corrupt">已损坏</string>
+    <string name="image_list_load_failed">镜像列表加载失败。</string>
+    <string name="image_activated_next_boot">已激活，下次启动生效</string>
+    <string name="image_reverify">重新校验</string>
+    <string name="image_redownload">重新下载</string>
+    <string name="image_imported">已导入 %1$s</string>
+    <string name="image_verify_ok">校验通过</string>
+    <string name="image_verify_failed">校验失败——镜像已损坏</string>
+    <string name="image_err_not_an_image">不是 VMDroid .img——请用 Podroid-Debian tools/mkimg.sh 打包（见项目 README）。</string>
+    <string name="image_err_corrupt">镜像已损坏，请重新校验或重新下载。</string>
+    <string name="image_err_format">镜像格式过新，当前应用版本不支持。</string>
+    <string name="image_err_arch">镜像架构与本机不符。</string>
+    <string name="image_err_app_old">该镜像需要更新版本的应用。</string>
+    <string name="image_err_missing">镜像文件缺失，请重新导入。</string>
+    <string name="image_err_generic">镜像操作失败：%1$s</string>
+
+    <!-- 激活冲突对话框（§8.5） -->
+    <string name="reset_dialog_title">需要重置虚拟机数据</string>
+    <string name="reset_dialog_body">目标镜像与当前系统不同（%1$s → %2$s）。为保证可启动，需要清空虚拟机数据盘 storage.img。</string>
+    <string name="reset_dialog_deletes">将删除：容器数据、apt/apk 已装包、/root 内容</string>
+    <string name="reset_dialog_keeps">不会删除：已下载的系统镜像</string>
+    <string name="reset_confirm_switch">重置并切换</string>
+    <string name="reset_confirm_keep">切换（保留数据）</string>
+    <string name="reset_advanced_keep">高级：保留数据（可能导致系统无法启动）</string>
 </resources>

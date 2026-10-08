@@ -749,6 +749,154 @@ private fun testFailuresDoNotBlock() {
 }
 
 // ======================================================================
+// M3（§4.3 / §7.3 / §13.2）：数据盘清零 · meta 前置判定 · 换系统/损坏/导入
+// ======================================================================
+
+private fun testResetStorage() {
+    check("resetStorage 整文件清零：内容全零、尺寸不变、factory_reset 字段（§4.3/§16.5）") {
+        val dir = tempDir("reset-storage")
+        val rec = Rec()
+        val store = newStore(dir, rec)
+        val storage = File(dir, "storage.img")
+        storage.writeBytes(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8))
+        must(store.resetStorage(storage), "应清零成功")
+        val bytes = storage.readBytes()
+        must(bytes.size == 8, "尺寸应不变：${bytes.size}")
+        must(bytes.all { it == 0.toByte() }, "应整文件清零，实际 ${bytes.toList()}")
+        val ev = rec.events.last { it.first == "factory_reset" }.second
+        must(ev["old_size"] == 8L && ev["new_size"] == 8L, "尺寸字段错：$ev")
+        must(ev["method"] == "whole-file-zero", "method 错：$ev")
+        must(ev.containsKey("dur_ms"), "事件应带 dur_ms：$ev")
+    }
+
+    check("resetStorage 文件不存在 → false 不抛不记事件（BootGuard #11 引擎按需创建）") {
+        val dir = tempDir("reset-absent")
+        val rec = Rec()
+        val store = newStore(dir, rec)
+        must(!store.resetStorage(File(dir, "storage.img")), "无文件应返回 false")
+        must(rec.events.none { it.first == "factory_reset" }, "不应记 factory_reset")
+    }
+
+    check("§8.5 确认路径端到端：identity 变更 → 信号 → 清零 → allowReset=true 激活") {
+        val dir = tempDir("reset-e2e")
+        val rec = Rec()
+        val store = newStore(dir, rec)
+        store.activate(install(store, "debian-minimal.img").imageId)
+        val storage = File(dir, "storage.img")
+        storage.writeBytes(ByteArray(1024) { it.toByte() })
+
+        val alpine = install(store, "alpine-minimal.img").imageId
+        val signal = store.activate(alpine)
+        must(signal is SystemImageStore.ActivateResult.ResetRequired, "应先给 RESET_REQUIRED 信号：$signal")
+        must(storage.readBytes().any { it != 0.toByte() }, "信号阶段不应清数据盘")
+
+        must(store.resetStorage(storage), "确认后应清零")
+        must(storage.readBytes().all { it == 0.toByte() }, "清零后应全零")
+        val done = store.activate(alpine, allowReset = true)
+        must(done is SystemImageStore.ActivateResult.Activated && done.decision == "identity",
+            "确认后应激活且 decision=identity：$done")
+        must(store.active()?.imageId == alpine, "active 应切换到 $alpine")
+
+        val acts = rec.events.filter { it.first == "activate" }.map { it.second }
+        must(acts.last()["decision"] == "identity", "activate.decision 应留痕：${acts.last()}")
+        must(acts.last()["reset_confirmed"] == true, "reset_confirmed 应留痕：${acts.last()}")
+        must(rec.events.any { it.first == "factory_reset" }, "应记 factory_reset")
+    }
+}
+
+private fun testPreflight() {
+    check("preflightMeta：已安装样本 → meta 存在且 quick 判通过") {
+        val dir = tempDir("preflight-ok")
+        val store = newStore(dir)
+        val id = install(store, "debian-minimal.img").imageId
+        val v = store.preflightMeta().single { it.imageId == id }
+        must(v.metaPresent && v.ok, "应通过：$v")
+    }
+
+    check("preflightMeta：size 变化 → meta 在但 ok=false；meta 删除 → metaPresent=false") {
+        val dir = tempDir("preflight-stale")
+        val store = newStore(dir)
+        val id = install(store, "debian-minimal.img").imageId
+        val f = File(store.imagesDir, "$id.img")
+        f.appendBytes(byteArrayOf(0)) // size + mtime 双变
+        val v = store.preflightMeta().single { it.imageId == id }
+        must(v.metaPresent && !v.ok, "size/mtime 变化应判失败：$v")
+
+        File(store.imagesDir, "$id.img.meta.json").delete()
+        val v2 = store.preflightMeta().single { it.imageId == id }
+        must(!v2.metaPresent && !v2.ok, "meta 缺失应 metaPresent=false：$v2")
+    }
+
+    check("preflightMeta：目录为空 → 空表不抛（images/ 为空是 M1 正常态）") {
+        val dir = tempDir("preflight-empty")
+        val store = newStore(dir)
+        must(store.preflightMeta().isEmpty(), "空目录应返回空表")
+    }
+}
+
+private fun testM3Lifecycle() {
+    check("§13.2 E2E 换系统回滚：A→B→A 同 identity 均不重置、数据盘不动、decision 每次留痕") {
+        val dir = tempDir("m3-e2e-switch")
+        val rec = Rec()
+        val store = newStore(dir, rec)
+        val a = install(store, "debian-minimal.img").imageId
+        store.activate(a)
+        val storage = File(dir, "storage.img")
+        storage.writeBytes(byteArrayOf(7, 7, 7))
+
+        val b = install(store, "debian-desktop.img").imageId
+        val toB = store.activate(b)
+        must(toB is SystemImageStore.ActivateResult.Activated && toB.decision == "upgrade",
+            "A→B 应 upgrade 直接激活：$toB")
+        must(store.active()?.imageId == b, "active 应切到 B")
+        must(storage.readBytes().contentEquals(byteArrayOf(7, 7, 7)), "换系统不应动数据盘")
+
+        val backA = store.activate(a)
+        must(backA is SystemImageStore.ActivateResult.Activated && backA.decision == "upgrade",
+            "B→A 回滚应 upgrade：$backA")
+        must(store.active()?.imageId == a, "active 应回到 A")
+        must(storage.readBytes().contentEquals(byteArrayOf(7, 7, 7)), "回滚不应动数据盘")
+
+        val decisions = rec.events.filter { it.first == "activate" }.map { it.second["decision"] }
+        must(decisions == listOf("no_active", "upgrade", "upgrade"),
+            "每次 activate.decision 应留痕：$decisions")
+    }
+
+    check("§13.2 导入非 .img（junk 无 footer magic）→ 拒绝 + 不留 .part + import_fail 留痕") {
+        val dir = tempDir("m3-import-reject")
+        val rec = Rec()
+        val store = newStore(dir, rec)
+        val thrown = runCatching { install(store, "junk.img") }.exceptionOrNull()
+        must(thrown is VmdImageException, "应抛 VmdImageException：$thrown")
+        must((thrown as VmdImageException).bootGuardReason == "NOT_AN_IMAGE",
+            "reason 应映射 NOT_AN_IMAGE：${thrown.bootGuardReason} / ${thrown.message}")
+        must(store.list().isEmpty(), "不应安装成功：${store.list()}")
+        must(store.imagesDir.listFiles()!!.none { it.name.endsWith(".part") }, "不应残留 .part")
+        must(rec.events.any { it.first == "import_fail" }, "应记 import_fail")
+    }
+
+    check("§13.2 损坏镜像：payload 改 1 字节（mtime 变）→ 快判失败 + 全量重算 !ok + verify_fail 留痕") {
+        val dir = tempDir("m3-corrupt")
+        val rec = Rec()
+        val store = newStore(dir, rec)
+        val id = install(store, "debian-minimal.img").imageId
+        val f = File(store.imagesDir, "$id.img")
+        val bytes = f.readBytes()
+        bytes[0] = (bytes[0].toInt() xor 0x01).toByte() // rootfs 区首字节；footer/manifest 不动
+        f.writeBytes(bytes)
+
+        val quick = store.verify(id, full = false)
+        must(!quick.ok && quick.reason == "CORRUPT", "快判应失败：$quick")
+        val full = store.verify(id, full = true)
+        must(!full.ok, "全量重算应判损坏：$full")
+        must(rec.events.any { it.first == "verify_fail" }, "应记 verify_fail")
+        val chk = store.checkActivation(id)
+        must(chk is SystemImageStore.ActivationCheck.Rejected,
+            "损坏镜像 checkActivation 应拒绝：$chk")
+    }
+}
+
+// ======================================================================
 // main
 // ======================================================================
 
@@ -781,6 +929,9 @@ fun main(args: Array<String>) {
     testQuota()
     testBootGuard()
     testActivate()
+    testResetStorage()
+    testPreflight()
+    testM3Lifecycle()
     testFailuresDoNotBlock()
 
     println("")

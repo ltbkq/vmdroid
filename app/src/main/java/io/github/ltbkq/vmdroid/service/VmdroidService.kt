@@ -372,6 +372,11 @@ class VmdroidService : Service() {
                     // the VM could launch against a partial/missing file.
                     (application as? VmdroidApplication)?.awaitAssetsReady()
 
+                    // §7.3 / IMP-D09: same gate for the image side — awaitImagesReady()
+                    // settles the images/*.meta.json verdict scan so start() never
+                    // races a background meta check (M1/M2 treated it as immediate).
+                    (application as? VmdroidApplication)?.awaitImagesReady()
+
                     val rules = portForwardRepository.getRulesSnapshot().toMutableList()
                     val sshEnabled = settingsRepository.getSshEnabledSnapshot()
 

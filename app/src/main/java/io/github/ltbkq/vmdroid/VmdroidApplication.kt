@@ -11,6 +11,7 @@ import android.app.Application
 import android.os.Build
 import android.util.Log
 import dagger.hilt.android.HiltAndroidApp
+import io.github.ltbkq.vmdroid.systemimage.SystemImageRepository
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,7 @@ import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
 
 @HiltAndroidApp
 class VmdroidApplication : Application() {
@@ -34,12 +36,23 @@ class VmdroidApplication : Application() {
     // in QemuEngine/AvfEngine's own asset reads, not by this signal.
     private val assetsReady = CompletableDeferred<Unit>()
 
+    // §7.3 image-side counterpart of assetsReady: completed once the
+    // images/*.meta.json verdict scan (preflightImages) has settled. Hilt
+    // injects this during super.onCreate(), i.e. before the scan is launched.
+    @Inject
+    lateinit var systemImages: SystemImageRepository
+
+    private val imagesReady = CompletableDeferred<Unit>()
+
     override fun onCreate() {
         super.onCreate()
         exemptHiddenApi()
         // Extract off the main thread: the firmware payload alone is tens of MB
         // and blocking onCreate on first install/upgrade would ANR the cold start.
         appScope.launch { extractAssets() }
+        // §7.3 / IMP-D09: settle the .meta.json verdicts off the main thread;
+        // launchVmdroid awaits awaitImagesReady() next to awaitAssetsReady().
+        appScope.launch { preflightImages() }
     }
 
     /**
@@ -49,6 +62,41 @@ class VmdroidApplication : Application() {
      * The system image is NOT bundled — see SystemImageRepository.
      */
     suspend fun awaitAssetsReady() = assetsReady.await()
+
+    /**
+     * §7.3: suspends until every installed image's `.meta.json` has been read
+     * and size/mtime-judged ([awaitImagesReady] — IMP-D09, 归 M3). Completed —
+     * never failed — in [preflightImages]' finally, so a waiter can never hang;
+     * the authoritative start-time judgment stays with BootGuard (§7.4).
+     */
+    suspend fun awaitImagesReady() = imagesReady.await()
+
+    /**
+     * One-shot scan behind [awaitImagesReady]: runs the store's pure
+     * preflightMeta() (no image.log events — §16.5 does not define one) and
+     * warns about mismatches. Any throwable settles the gate in finally —
+     * a broken scan must delay nothing; BootGuard re-decides at start().
+     */
+    private fun preflightImages() {
+        try {
+            for (v in systemImages.preflightImages()) {
+                if (!v.ok) {
+                    Log.w(
+                        TAG,
+                        if (v.metaPresent) {
+                            "image preflight: '${v.imageId}' size/mtime mismatch vs .meta.json (full re-verify at start)"
+                        } else {
+                            "image preflight: '${v.imageId}' .meta.json missing (full re-verify at start)"
+                        },
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "image preflight failed (start-time BootGuard still decides)", t)
+        } finally {
+            imagesReady.complete(Unit)
+        }
+    }
 
     // Android 14+ hides @SystemApi reflection lookups (returning NoSuchMethod
     // even via getDeclared*). Prefixes needing exemption:

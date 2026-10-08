@@ -13,7 +13,8 @@
  * `systemimage-selftest/` 自测）。BootGuard 主判定见 `BootGuard.kt`（§7.4）。
  *
  * v1 状态：`list/active/install/activate/delete/verify` + BootGuard 已接线；
- * 下载（§6.2 断点续传）与 SAF 选择器 UI 由后续里程碑接入。
+ * SAF 导入与 §8.2 选择控件 / §8.5 对话框的 UI 接线在 Home（`HomeViewModel`）；
+ * 下载（§6.2 断点续传）由 M4 接入。
  */
 package io.github.ltbkq.vmdroid.systemimage
 
@@ -135,6 +136,21 @@ class SystemImageRepository @Inject constructor(
      */
     fun verify(imageId: String, full: Boolean = false): SystemImageStore.VerifyResult =
         store.verify(imageId, full)
+
+    /**
+     * §7.3 `awaitImagesReady()` 的前置判定（应用启动时跑一次，VmdroidApplication
+     * 在放行 `imagesReady` 前调用）：逐个读 `.meta.json` 并做 size+mtime 快判，
+     * **不**重算 sha256（启动期主判定仍由 BootGuard §7.4 兜底）。
+     */
+    fun preflightImages(): List<SystemImageStore.PreflightVerdict> = store.preflightMeta()
+
+    /**
+     * §8.5「重置并切换」确认后清零重建 `storage.img`（§4.3 整文件清零；§16.5 记
+     * `factory_reset`）。文件不存在返回 false —— 引擎 `ensureStorageImage()` 按需
+     * 创建，BootGuard #11 非拒绝项。
+     */
+    fun rebuildStorageImage(): Boolean =
+        store.resetStorage(File(context.filesDir, STORAGE_FILE))
 
     private fun versionCode(): Long = try {
         val pi = context.packageManager.getPackageInfo(context.packageName, 0)

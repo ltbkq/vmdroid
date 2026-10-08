@@ -20,6 +20,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -208,6 +209,38 @@ class SystemImageStore @JvmOverloads constructor(
     fun quickVerify(file: File, meta: ImageMeta?): Boolean {
         if (meta == null || !file.isFile) return false
         return file.length() == meta.size && file.lastModified() == meta.mtime
+    }
+
+    /** [preflightMeta] 单项判定（§7.3）。 */
+    data class PreflightVerdict(
+        val imageId: String,
+        /** `.meta.json` 是否存在且可解析。 */
+        val metaPresent: Boolean,
+        /** [quickVerify]（size+mtime）是否通过。 */
+        val ok: Boolean,
+    )
+
+    /**
+     * §7.3 `awaitImagesReady()` 的前置判定扫描：逐个读 `.meta.json` 并做
+     * [quickVerify]（size+mtime，**不**重算 sha256）——「`.meta.json` 校验判定
+     * 完成」的字面含义。单项异常吞掉记 false（扫描只为「判定完成」这一时序服务；
+     * 启动期主判定仍由 BootGuard §7.4 兜底）。**不写 image.log**（§16.5 事件表
+     * 未定义该事件，勿自造）。
+     */
+    fun preflightMeta(): List<PreflightVerdict> {
+        val installed = try {
+            list()
+        } catch (e: Exception) {
+            return emptyList()
+        }
+        return installed.map { img ->
+            val ok = try {
+                quickVerify(img.file, img.meta)
+            } catch (e: Exception) {
+                false
+            }
+            PreflightVerdict(img.imageId, metaPresent = img.meta != null, ok = ok)
+        }
     }
 
     // ---------------------------------------------------------------- 写 meta / active
@@ -507,6 +540,38 @@ class SystemImageStore @JvmOverloads constructor(
         if (newKey.contractVersion != activeKey.contractVersion) return VmdImageCodec.ResetDecision.CONTRACT
         if (newKey.distroInit != activeKey.distroInit) return VmdImageCodec.ResetDecision.INIT
         return VmdImageCodec.ResetDecision.UPGRADE
+    }
+
+    // ---------------------------------------------------------------- 数据盘（§4.3）
+
+    /**
+     * §4.3 **整文件清零**重建 `storage.img`：§8.5「重置并切换」确认后、再次
+     * `activate(allowReset=true)` 之前由上层调用（M5 恢复出厂复用同一路径）。
+     *
+     * 实现为「截断到 0 → 按原尺寸稀疏重扩」：逻辑内容全零（稀疏洞读作 0）、
+     * 文件尺寸不变；guest `init-podroid` 开机检测到全零即自动 `mkfs.ext4`。
+     * 文件不存在 = 无事可做（BootGuard #11 非拒绝：引擎 `ensureStorageImage()`
+     * 按需创建），返回 false 不抛。§16.5 记 `factory_reset`
+     * （`old_size`/`new_size`/`method=whole-file-zero`）。
+     */
+    fun resetStorage(storageFile: File): Boolean {
+        val startedAt = nowMs()
+        if (!storageFile.isFile) return false
+        val oldSize = storageFile.length()
+        RandomAccessFile(storageFile, "rw").use { raf ->
+            raf.setLength(0)
+            raf.setLength(oldSize)
+        }
+        emit(
+            "factory_reset",
+            linkedMapOf(
+                "old_size" to oldSize,
+                "new_size" to storageFile.length(),
+                "method" to "whole-file-zero",
+            ),
+            startedAt,
+        )
+        return true
     }
 
     // ---------------------------------------------------------------- 删除（§5.3）
