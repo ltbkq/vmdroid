@@ -87,7 +87,7 @@ EOF
 
 build_kernel() {
     local kernel_ver
-    kernel_ver=$(grep -E '^podroidKernelVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
+    kernel_ver=$(grep -E '^vmdroidKernelVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
     log "Building custom kernel ${kernel_ver} for aarch64 (Docker)..."
     docker build --network=host \
         --build-arg "KERNEL_VERSION=${kernel_ver}" \
@@ -103,7 +103,7 @@ build_kernel() {
 
 build_initramfs() {
     local kernel_ver
-    kernel_ver=$(grep -E '^podroidKernelVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
+    kernel_ver=$(grep -E '^vmdroidKernelVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
     log "Building custom kernel + Alpine Initramfs (Docker)..."
     docker build --network=host \
         --build-arg "KERNEL_VERSION=${kernel_ver}" \
@@ -133,7 +133,7 @@ build_rootfs() {
 
 build_qemu() {
     local qemu_ver
-    qemu_ver=$(grep -E '^podroidQemuVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
+    qemu_ver=$(grep -E '^vmdroidQemuVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
     log "Building QEMU ${qemu_ver} for Android ARM64 (Docker)..."
     
     docker build --build-arg "QEMU_VERSION=${qemu_ver}" \
@@ -169,8 +169,8 @@ deploy_apk() {
 }
 
 run_boot_test() {
-    local pkg="com.excp.podroid.debug"
-    local activity="com.excp.podroid.MainActivity"
+    local pkg="io.github.ltbkq.vmdroid.debug"
+    local activity="io.github.ltbkq.vmdroid.MainActivity"
     local timeout=60
     
     log "Starting Automated Boot Test..."

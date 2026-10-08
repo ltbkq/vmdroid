@@ -23,5 +23,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Podroid"
+rootProject.name = "Vmdroid"
 include(":app", ":terminal-emulator", ":terminal-view")

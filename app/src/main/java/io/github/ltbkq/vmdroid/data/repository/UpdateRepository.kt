@@ -21,6 +21,15 @@ data class UpdateInfo(
 )
 
 /**
+ * Update-check endpoint. Points at this project's own releases (not the
+ * upstream ExTV/Podroid releases, which would surface the wrong APK to users).
+ * Overridable for CI/staging via a system property.
+ */
+private val UPDATE_RELEASES_URL: String =
+    System.getProperty("vmdroid.updateReleasesUrl")
+        ?: "https://api.github.com/repos/ltbkq/vmdroid/releases/latest"
+
+/**
  * Returns true when the cache has expired and a fresh network check is warranted.
  *
  * Uses wall-clock milliseconds (currentTimeMillis) — not uptimeMillis, which
@@ -142,7 +151,7 @@ class UpdateRepository @Inject constructor(
                 return@withContext null
             }
 
-            connection = URL("https://api.github.com/repos/ExTV/Podroid/releases/latest")
+            connection = URL(UPDATE_RELEASES_URL)
                 .openConnection() as java.net.HttpURLConnection
             connection.connectTimeout = 5000
             connection.readTimeout = 5000

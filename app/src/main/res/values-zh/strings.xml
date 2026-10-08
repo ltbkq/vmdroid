@@ -56,7 +56,7 @@
     <string name="ram_label">内存</string>
     <string name="network_label">网络</string>
     <string name="ssh_access">SSH 访问</string>
-    <string name="ssh_password_hint">ssh root@&lt;手机-ip&gt; -p 9922   (密码: podroid)</string>
+    <string name="ssh_password_hint">ssh ltbkq@localhost -p 9922   (密码: 123)</string>
     <string name="load_balance">负载均衡</string>
     <string name="load_balance_description">根据本机自动调整 CPU、内存、存储和带宽。</string>
     <string name="load_balance_storage_hint">存储大小已自动设置。在下一步关闭负载均衡后可手动选择。</string>

@@ -72,7 +72,8 @@ java -cp "/tmp/vmd-junit-classes:$CP:$K/kotlinc/lib/kotlin-stdlib.jar" \
   org.junit.runner.JUnitCore io.github.ltbkq.vmdroid.systemimage.VmdImageCodecTest
 ```
 
-CI 中 fixtures 缺失时测试类整体 **skip**（`Assume`），可用 `-Dvmd.fixtures=/path` 指定。
+CI 中 fixtures 缺失时测试类**直接 fail（不 skip）**，可用 `-Dvmd.fixtures=/path` 指定
+（缺失即 fail 避免"绿灯假象"，IMP-T03；CI 须先跑 `gen_fixtures.py` 并断言产物存在）。
 项目 Gradle 集成后等价于 `./gradlew :app:test`（同一源码，同一断言）。
 
 ## 4. 负向向量 → 期望 reason（§8 × §7.4）

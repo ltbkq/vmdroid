@@ -21,8 +21,8 @@ Podroid is an Android app that runs a real **Alpine 3.24** Linux VM on stock And
 | Min / target SDK | 26 (Android 8) / 36 |
 | Architecture | arm64 (`aarch64`) only |
 | Guest | Alpine 3.24 squashfs + persistent ext4 overlay, OpenRC PID 1 |
-| Kernel | custom Linux, version pinned by `podroidKernelVersion` in `gradle.properties` |
-| QEMU | version pinned by `podroidQemuVersion` in `gradle.properties` |
+| Kernel | custom Linux, version pinned by `vmdroidKernelVersion` in `gradle.properties` |
+| QEMU | version pinned by `vmdroidQemuVersion` in `gradle.properties` |
 | UI | Jetpack Compose + Material 3, single Activity |
 | DI | Hilt (constructor injection) |
 | Async | Coroutines + StateFlow |

@@ -37,8 +37,8 @@ Component versions are pinned in one place each, so read the pin rather than tru
 
 | Component | Pinned in |
 |---|---|
-| Linux kernel | `podroidKernelVersion` in `gradle.properties` |
-| QEMU | `podroidQemuVersion` in `gradle.properties` |
+| Linux kernel | `vmdroidKernelVersion` in `gradle.properties` |
+| QEMU | `vmdroidQemuVersion` in `gradle.properties` |
 | Alpine | `ARG ALPINE_RELEASE` in `build-rootfs/Dockerfile.rootfs` |
 
 Or, for the common case where you only changed Kotlin / UI code:

@@ -4,15 +4,16 @@
  * 归属（DESIGN §13.1「单元 (JVM)」行）：往返编解码、footer 定位、字段缺省、
  * 截断/损坏/错位/越界拒绝、ssh_port≠22 拒绝、identity 判据全表、流式 sha256。
  *
- * fixtures 由 codec-selftest/gen_fixtures.py 生成；找不到时整类 skip（Assume），
+ * fixtures 由 codec-selftest/gen_fixtures.py 生成；找不到时**直接 fail（不 Assume 跳过）**，
  * 可用 -Dvmd.fixtures=/path/to/fixtures 显式指定（CI 可把向量库挂到任意路径）。
+ * 缺 fixture 静默跳过会造成"绿灯假象"，故此处硬失败（IMP-T03）。
  */
 package io.github.ltbkq.vmdroid.systemimage
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import java.io.File
@@ -25,11 +26,12 @@ class VmdImageCodecTest {
     @Before
     fun setUpFixtures() {
         fixtures = locateFixtures()
-        Assume.assumeTrue(
-            "fixtures not found (run: python3 codec-selftest/gen_fixtures.py, " +
-                "or set -Dvmd.fixtures=/path/to/fixtures)",
-            fixtures.isDirectory,
-        )
+        if (!fixtures.isDirectory) {
+            fail(
+                "fixtures not found at $fixtures — run python3 codec-selftest/gen_fixtures.py, " +
+                    "or set -Dvmd.fixtures=/path/to/fixtures. Missing fixtures MUST fail, not skip.",
+            )
+        }
         tmp = File(System.getProperty("java.io.tmpdir"), "vmd-codec-junit").apply {
             deleteRecursively()
             mkdirs()
@@ -504,7 +506,7 @@ class VmdImageCodecTest {
     }
 
     companion object {
-        /** 依次尝试 -Dvmd.fixtures、相对路径与向上目录；找不到返回不存在的目录 → Assume skip。 */
+        /** 依次尝试 -Dvmd.fixtures、相对路径与向上目录；找不到返回不存在的目录 → setUp 中 fail。 */
         private fun locateFixtures(): File {
             System.getProperty("vmd.fixtures")?.let {
                 val f = File(it)

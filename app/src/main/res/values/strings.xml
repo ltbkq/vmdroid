@@ -56,7 +56,7 @@
     <string name="ram_label">RAM</string>
     <string name="network_label">Network</string>
     <string name="ssh_access">SSH access</string>
-    <string name="ssh_password_hint">ssh root@&lt;phone-ip&gt; -p 9922   (password: podroid)</string>
+    <string name="ssh_password_hint">ssh ltbkq@localhost -p 9922   (password: 123)</string>
     <string name="load_balance">Load balance</string>
     <string name="load_balance_description">Automatically tune CPU, RAM, storage, and bandwidth for this device.</string>
     <string name="load_balance_storage_hint">Storage size is set automatically. Turn off load balance on the next step to pick manually.</string>
