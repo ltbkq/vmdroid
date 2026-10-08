@@ -465,11 +465,11 @@ fun main(args: Array<String>) {
             VmdImageCodec.decideReset(a.copy(rootfsSha256 = "cc"), a) == ResetDecision.UPGRADE,
             "同 identity 升级 → upgrade",
         )
-        // image.log 引用的小写 code（§5.2："勿自造"）
+        // image.log 引用的小写 code（§5.2 表全 7 行、表序；"勿自造"）
         must(
-            listOf("same", "identity", "contract", "init", "upgrade") ==
+            listOf("no_active", "active_unreadable", "same", "identity", "contract", "init", "upgrade") ==
                 ResetDecision.entries.map { it.code },
-            "decision code 必须是 §5.2 表中的小写值",
+            "decision code 必须是 §5.2 表中的小写值（含 no_active/active_unreadable）",
         )
         // ImageInfo.resetKey() 与 manifest/footer 一致
         val info = VmdImageCodec.read(File(fixtures, "valid-min.img"))

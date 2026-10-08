@@ -79,3 +79,9 @@ app/src/main/jniLibs/
 # VMDroid codec selftest — generated (recreate: python3 codec-selftest/gen_fixtures.py)
 /codec-selftest/fixtures/
 /codec-selftest/out/
+
+# VMDroid systemimage selftest — generated
+#   fixtures: python3 systemimage-selftest/gen_fixtures.py
+#   out/:     kotlinc jar + classes (~88 MB, -include-runtime bundles a JRE)
+/systemimage-selftest/fixtures/
+/systemimage-selftest/out/

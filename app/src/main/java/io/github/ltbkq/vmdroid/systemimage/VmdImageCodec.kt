@@ -403,8 +403,10 @@ object VmdImageCodec {
         val distroInit: String?,
     )
 
-    /** DESIGN §5.2 `decision` 枚举；[code] 为 image.log 直接引用的小写值（"勿自造"）。 */
+    /** DESIGN §5.2 `decision` 枚举（**声明序 = §5.2 表序**）；[code] 为 image.log 直接引用的小写值（"勿自造"）。 */
     enum class ResetDecision(val code: String) {
+        NO_ACTIVE("no_active"),
+        ACTIVE_UNREADABLE("active_unreadable"),
         SAME("same"),
         IDENTITY("identity"),
         CONTRACT("contract"),
@@ -976,6 +978,11 @@ object VmdImageCodec {
     /**
      * 换镜像是否需要重置数据盘（§5.2 决策表，按顺序取第一个匹配）：
      * `same`（内容优先，永不重置）→ `identity` → `contract`（硬判据）→ `init`（硬判据）→ `upgrade`（不重置）。
+     *
+     * 表的前两行 `no_active` / `active_unreadable` 需要 `active.json` 的**存在性**与激活镜像的
+     * **可读性**——本纯比较函数假定两个 [ResetKey] 均有效，故不产生它们；由
+     * `SystemImageStore.decideFor()` 判出后写入同一 [ResetDecision]。
+     *
      * 返回值的 [ResetDecision.code] 可直接写 `image.log`（"勿自造"）。
      */
     @JvmStatic

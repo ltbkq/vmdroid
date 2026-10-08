@@ -35,6 +35,7 @@ import io.github.ltbkq.vmdroid.engine.VmConfig
 import io.github.ltbkq.vmdroid.engine.VmEngine
 import io.github.ltbkq.vmdroid.engine.VmState
 import io.github.ltbkq.vmdroid.engine.usb.UsbPassthroughManager
+import io.github.ltbkq.vmdroid.systemimage.SystemImageRepository
 import io.github.ltbkq.vmdroid.util.NetworkUtils
 import io.github.ltbkq.vmdroid.x11.X11Constants
 import dagger.hilt.android.AndroidEntryPoint
@@ -80,7 +81,25 @@ class VmdroidService : Service() {
     @Inject lateinit var usbPassthroughManager: UsbPassthroughManager
     @Inject lateinit var notificationPoster: io.github.ltbkq.vmdroid.engine.hostbridge.AndroidNotificationPoster
     @Inject lateinit var headlessModeManager: io.github.ltbkq.vmdroid.engine.hostbridge.HeadlessModeManager
+    /**
+     * M3: image manager (DESIGN §7.4 — the BootGuard *main* check lives in
+     * `start()`; the engines' `failFastNoImage()` stays a backstop) + the
+     * `image.log` writer (§16.5) shared with the repository's event sink.
+     */
+    @Inject lateinit var systemImageRepository: SystemImageRepository
     private var hostRequestServer: io.github.ltbkq.vmdroid.engine.hostbridge.HostRequestServer? = null
+
+    /**
+     * M3: §16.2 boot-log rotator. Constructed from `filesDir`, reports failures
+     * through logcat only — `prepareBoot()` never throws, so a broken/readonly
+     * `boots/` can never block a VM start (R3: C-R3-6).
+     */
+    private val bootRotator by lazy {
+        io.github.ltbkq.vmdroid.systemimage.BootRotator(
+            filesDir,
+            warn = { msg, t -> Log.w(TAG, msg, t) },
+        )
+    }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var notificationJob: Job? = null
@@ -392,6 +411,46 @@ class VmdroidService : Service() {
                     if (config.usbPassthroughEnabled) {
                         serviceScope.launch { observeStateForUsb() }
                     }
+
+                    // M3: BootGuard 主判定（DESIGN §7.4 权威清单；"主判定在
+                    // VmdroidService.start()，引擎内为兜底"）。拒绝 → 记 image.log
+                    // 的 bootguard_reject（§16.5）+ 中止启动：engine.start() 不会被调用。
+                    val guard = systemImageRepository.bootGuard()
+                    val verdict = guard.checkBeforeStart()
+                    if (!verdict.ok) {
+                        Log.w(TAG, "BootGuard blocked start: ${verdict.reasonName} — ${verdict.detail}")
+                        systemImageRepository.imageLog.record(
+                            "bootguard_reject",
+                            guard.rejectFields(verdict),
+                            sync = true,
+                        )
+                        withContext(Dispatchers.Main) { teardown() }
+                        return@withContext
+                    }
+
+                    // M3: §16.2 轮转时序 ①–④（BootGuard 通过后、engine.start() 之前）。
+                    // prepareBoot 内部每步独立 try/catch —— 日志失败绝不阻断启动。
+                    val session = bootRotator.prepareBoot(
+                        io.github.ltbkq.vmdroid.systemimage.BootMetaInit(
+                            // `is` 检查（不用 javaClass.simpleName —— R8 会把类名混淆掉，
+                            // 见 handlePowerRequest 上方同款注释）
+                            backend = if (engine is io.github.ltbkq.vmdroid.engine.avf.AvfEngine) {
+                                "avf"
+                            } else {
+                                "qemu"
+                            },
+                            image = systemImageRepository.activeImageId(),
+                            imageSha256 = systemImageRepository.active()?.rootfsSha256,
+                            appVersion = runCatching {
+                                packageManager.getPackageInfo(packageName, 0).versionName
+                            }.getOrNull(),
+                        ),
+                    )
+                    systemImageRepository.imageLog.setBootId(session.bootId)
+                    if (session.skippedSteps.isNotEmpty()) {
+                        Log.w(TAG, "boot log rotation partially skipped: ${session.skippedSteps}")
+                    }
+
                     engine.start(rules, config)
                 } catch (c: CancellationException) {
                     throw c // a stop/teardown cancelled this launch; not a start failure

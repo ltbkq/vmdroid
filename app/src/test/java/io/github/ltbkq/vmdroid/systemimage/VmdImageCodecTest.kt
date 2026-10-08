@@ -470,9 +470,11 @@ class VmdImageCodecTest {
             VmdImageCodec.ResetDecision.UPGRADE,
             VmdImageCodec.decideReset(a.copy(rootfsSha256 = "cc"), a),
         )
-        // image.log 引用的小写 code（§5.2："勿自造"）
+        // image.log 引用的小写 code（§5.2 表全 7 行、表序；"勿自造"）
         assertEquals(
-            listOf("same", "identity", "contract", "init", "upgrade"),
+            listOf(
+                "no_active", "active_unreadable", "same", "identity", "contract", "init", "upgrade",
+            ),
             VmdImageCodec.ResetDecision.entries.map { it.code },
         )
         // resetKey() 与 footer/manifest 一致
