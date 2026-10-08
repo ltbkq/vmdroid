@@ -37,8 +37,7 @@
 | 验收 | `tools/boot-test.sh` 轮询 console 到 `Ready!`；双账户 SSH 登录成功 |
 | 获取系统 | 应用内目录**下载**（断点续传 + sha256 校验）· 或**从文件导入**——**仅 `.img` 格式**（其他格式用 `mkimg.sh` 封装） |
 | 首次运行 | 无镜像 → **引导页**（下载/导入），启动按钮隐藏，不会启动挂载失败的死机（[DESIGN §8.4](docs/DESIGN.md)） |
-| **PC 启动** | `.img` 自带 kernel/initrd，Linux PC 上 `tools/pc-run.sh debian.img` 一条命令进入 `Ready!` |
-| **PC 启动** | `.img` 自带 kernel/initrd，Linux PC 上 `tools/pc-run.sh debian.img` 一条命令进入 `Ready!`（依赖 `apt install qemu-system-arm python3 e2fsprogs`） |
+| **PC 启动** | `.img` 自带 kernel/initrd，Linux PC 上 `tools/pc-run.sh debian.img` 一条命令进入 `Ready!`（依赖 `apt install qemu-system-arm python3 e2fsprogs ssh sshpass`） |
 | 启动镜像 | Home 页**启动镜像选择控件**，一键切换已安装的 `.img`（详见 [DESIGN §8.2](docs/DESIGN.md)） |
 | 恢复出厂 | 清零数据盘 `storage.img`，guest 下次开机自动重建（无需种子，[DESIGN §4.3](docs/DESIGN.md)） |
 | 日志诊断 | **历史启动不丢**（`boots/` 归档 + 阶段耗时 + 失败原因），一键导出诊断包（详见 [DESIGN §16](docs/DESIGN.md)） |
@@ -71,9 +70,9 @@ docs/
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| M0 | 设计评审（R1–R3）+ P0 spike（尾随数据真机直挂 + PC 启动计时） | **评审完成 R1–R3 ✅，待 P0 spike** |
-| M1 | fork 上游 → 改名/包名 → 移除 rootfs 资产 | 未开始 |
-| M2 | `.img` 编解码 + `mkimg.sh`（`--kernel/--initrd`）+ 首个 `debian.img` + `pc-run.sh` + 账户规范 | 未开始 |
+| M0 | 设计评审（R1–R4）+ P0 spike（尾随数据真机直挂 + PC 启动计时） | **评审完成 R1–R4 ✅**；P0 直挂已实测到 `Ready!`，SSH 登录待复验 |
+| M1 | fork 上游 → 改名/包名 → 移除 rootfs 资产 | **完成 ✅**（`app` 分支 8052a9a；app 模块编译通过，382 单测全绿） |
+| M2 | `.img` 编解码 + `mkimg.sh`（`--kernel/--initrd`）+ 首个 `debian.img` + `pc-run.sh` + 账户规范 | **工具链已提交**；`debian-minimal.img` 已构建，SSH 登录待复验 |
 | M3–M7 | 镜像管理 + 启动镜像选择控件 / 下载 / 恢复出厂 / 回归 / 发布 | 未开始 |
 
 详见 [docs/DESIGN.md §14](docs/DESIGN.md)。

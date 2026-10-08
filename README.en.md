@@ -37,8 +37,7 @@ A single system file — **Debian 13 (trixie) arm64 minimal install**, target �
 | Acceptance | `tools/boot-test.sh` polls console for `Ready!`; both accounts SSH in successfully |
 | Get the OS | in-app catalog **download** (resume + sha256) · or **import from file** — **`.img` only** (wrap others with `mkimg.sh`) |
 | First run | No image → **setup wizard** (download/import), start button hidden; never boots a mount-failed zombie (see [DESIGN §8.4](docs/DESIGN.md)) |
-| **PC boot** | `.img` ships kernel+initrd; on Linux PC `tools/pc-run.sh debian.img` reaches `Ready!` in one command |
-| **PC boot** | `.img` ships kernel+initrd; on Linux PC `tools/pc-run.sh debian.img` reaches `Ready!` in one command (deps: `apt install qemu-system-arm python3 e2fsprogs`) |
+| **PC boot** | `.img` ships kernel+initrd; on Linux PC `tools/pc-run.sh debian.img` reaches `Ready!` in one command (deps: `apt install qemu-system-arm python3 e2fsprogs ssh sshpass`) |
 | Boot image | a **boot-image selector** on the Home screen switches installed `.img` files (see [DESIGN §8.2](docs/DESIGN.md)) |
 | Factory reset | Zeros `storage.img`; guest re-creates it on next boot (no seed needed, [DESIGN §4.3](docs/DESIGN.md)) |
 | Diagnostics | **boot history is preserved** (`boots/` archive + stage timings + failure reason), one-tap diagnostic export (see [DESIGN §16](docs/DESIGN.md)) |
@@ -77,9 +76,9 @@ This repository is currently at the **design stage**; application code is not im
 
 | Phase | Content | Status |
 |---|---|---|
-| M0 | Design review (R1–R3) + P0 spike (trailing-data direct mount on real QEMU/AVF + PC boot timing) | **Review R1–R3 done ✅, P0 spike pending** |
-| M1 | Fork upstream → rename/package → strip rootfs asset | Not started |
-| M2 | `.img` codec + `mkimg.sh` (`--kernel/--initrd`) + first `debian.img` + `pc-run.sh` + account spec | Not started |
+| M0 | Design review (R1–R4) + P0 spike (trailing-data direct mount on real QEMU/AVF + PC boot timing) | **Review R1–R4 done ✅**; P0 direct-mount reached `Ready!`, SSH login pending re-verification |
+| M1 | Fork upstream → rename/package → strip rootfs asset | **Done ✅** (`app` branch 8052a9a; app module compiles, 382 unit tests green) |
+| M2 | `.img` codec + `mkimg.sh` (`--kernel/--initrd`) + first `debian.img` + `pc-run.sh` + account spec | **Toolchain committed**; `debian-minimal.img` built, SSH login pending re-verification |
 | M3–M7 | Image management + boot-image selector / download / factory reset / regression / release | Not started |
 
 See [docs/DESIGN.md §14](docs/DESIGN.md).

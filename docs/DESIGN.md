@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| 状态 | 草案 v0.1（2026-10-07） |
+| 状态 | **冻结 v1.0**（2026-10-08：R1–R3 评审冻结 + R4 实现期修订，见 reviews/R4.md） |
 | 关联仓库 | 本仓库 `ltbkq/vmdroid`（应用） · [`ltbkq/Podroid-Debian`](https://github.com/ltbkq/Podroid-Debian)（系统镜像构建） · [`ExTV/Podroid`](https://github.com/ExTV/Podroid)（VM 功能上游，GPLv2） |
 | 许可证 | GPL-2.0-or-later（继承上游） |
 | 目标平台 | Android 8+（API 26+），arm64（aarch64） |
