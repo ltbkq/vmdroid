@@ -115,6 +115,39 @@ class SystemImageRepository @Inject constructor(
         return file
     }
 
+    /**
+     * QEMU `-kernel` / `-initrd` 取自激活镜像 footer（IMAGE-FORMAT），不随 APK 发布。
+     * 每次启动覆写 `filesDir/vmlinuz-virt` 与 `initrd.img`：先写 `.tmp` 再 rename；
+     * [VmdImageCodec.extractPayload] 按 footer sha256 校验，坏段不落盘。
+     * @return 抽取成功 = true；无激活镜像 / 镜像无 kernel 段 = false。
+     */
+    fun extractBootPayloads(): Boolean {
+        val active = active() ?: return false
+        val info = store.readImage(active.imageId)
+        if (!info.footer.hasKernel) {
+            Log.w(TAG, "active image '${active.imageId}' carries no kernel payload")
+            return false
+        }
+        extractPayloadAtomic(info, "kernel", File(context.filesDir, "vmlinuz-virt"))
+        val initrd = File(context.filesDir, "initrd.img")
+        if (info.footer.hasInitrd) {
+            extractPayloadAtomic(info, "initrd", initrd)
+        } else {
+            initrd.delete()
+        }
+        return true
+    }
+
+    private fun extractPayloadAtomic(info: VmdImageCodec.ImageInfo, name: String, dst: File) {
+        val tmp = File(dst.parentFile, dst.name + ".tmp")
+        tmp.delete()
+        VmdImageCodec.extractPayload(info, name, tmp)
+        if (!tmp.renameTo(dst)) {
+            tmp.delete()
+            throw java.io.IOException("cannot replace ${dst.absolutePath}")
+        }
+    }
+
     /** `image_id` of the active system image, or `null` when none is active. */
     fun activeImageId(): String? = active()?.imageId
 

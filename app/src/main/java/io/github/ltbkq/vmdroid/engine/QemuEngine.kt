@@ -312,6 +312,9 @@ class QemuEngine @Inject constructor(
         File(hostSockPath).delete()
 
         try {
+            // Kernel/initrd come from the active image footer (not APK assets);
+            // refresh them before buildCommand() decides whether to pass -kernel.
+            withContext(Dispatchers.IO) { systemImageRepository.extractBootPayloads() }
             // null => failFastNoImage() already logged NO_SYSTEM_IMAGE and put
             // the engine into VmState.Error; bail before spawning anything.
             val cmd = buildCommand(qemuExe, portForwards, config) ?: return
