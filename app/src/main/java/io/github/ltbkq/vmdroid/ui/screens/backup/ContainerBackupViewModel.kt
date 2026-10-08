@@ -1,0 +1,126 @@
+package io.github.ltbkq.vmdroid.ui.screens.backup
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import io.github.ltbkq.vmdroid.data.repository.ContainerBackupFile
+import io.github.ltbkq.vmdroid.data.repository.ContainerBackupRepository
+import io.github.ltbkq.vmdroid.data.repository.SettingsRepository
+import io.github.ltbkq.vmdroid.engine.VmEngine
+import io.github.ltbkq.vmdroid.engine.VmState
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+
+data class ContainerBackupUiState(
+    val vmRunning: Boolean = false,
+    val storageAccessEnabled: Boolean = false,
+    val guestPath: String = "/var/backups/podroid",
+    val backupFiles: List<ContainerBackupFile> = emptyList(),
+    val backupListError: Boolean = false,
+    val containerName: String = "",
+    val imageRef: String = "",
+)
+
+@HiltViewModel
+class ContainerBackupViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val repository: ContainerBackupRepository,
+    private val settingsRepository: SettingsRepository,
+    private val engine: VmEngine,
+) : ViewModel() {
+
+    private val _containerName = MutableStateFlow("")
+    private val _imageRef = MutableStateFlow("")
+    private val _backupFiles = MutableStateFlow<List<ContainerBackupFile>>(emptyList())
+    private val _backupListError = MutableStateFlow(false)
+
+    val uiState: StateFlow<ContainerBackupUiState> = combine(
+        combine(
+            engine.state,
+            settingsRepository.storageAccessEnabled,
+            _containerName,
+            _imageRef,
+            _backupFiles,
+        ) { vmState, storageAccess, container, image, files ->
+            ContainerBackupUiState(
+                vmRunning = vmState is VmState.Running,
+                storageAccessEnabled = storageAccess,
+                guestPath = repository.guestBackupPathLabel(storageAccess),
+                backupFiles = files,
+                containerName = container,
+                imageRef = image,
+            )
+        },
+        _backupListError,
+    ) { state, listError ->
+        state.copy(backupListError = listError)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ContainerBackupUiState())
+
+    init {
+        refresh()
+    }
+
+    fun refresh() {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { repository.listBackupFiles() }
+            }
+            result.onSuccess { files ->
+                _backupFiles.value = files
+                _backupListError.value = false
+            }.onFailure {
+                _backupListError.value = true
+            }
+        }
+    }
+
+    fun setContainerName(value: String) {
+        _containerName.value = value
+    }
+
+    fun setImageRef(value: String) {
+        _imageRef.value = value
+    }
+
+    fun copyExportCommand(): Boolean {
+        val name = _containerName.value.trim()
+        if (name.isEmpty()) return false
+        copyToClipboard(repository.exportCommand(name))
+        return true
+    }
+
+    fun copySaveCommand(): Boolean {
+        val ref = _imageRef.value.trim()
+        if (ref.isEmpty()) return false
+        copyToClipboard(repository.saveImageCommand(ref))
+        return true
+    }
+
+    fun copyListCommand() {
+        copyToClipboard(repository.listCommand())
+    }
+
+    fun copyAllCommand() {
+        copyToClipboard("podroid-backup all")
+    }
+
+    fun formatSize(bytes: Long): String = repository.formatSize(bytes)
+
+    fun formatDate(ms: Long): String = repository.formatDate(ms)
+
+    private fun copyToClipboard(text: String) {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("podroid-backup", text))
+    }
+}

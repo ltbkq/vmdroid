@@ -14,7 +14,7 @@ plugins {
 val podroidQemuVersion = providers.gradleProperty("podroidQemuVersion").get()
 
 android {
-    namespace = "com.excp.podroid"
+    namespace = "io.github.ltbkq.vmdroid"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -22,7 +22,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.excp.podroid"
+        applicationId = "io.github.ltbkq.vmdroid"
         minSdk = 26
         targetSdk = 36
         versionCode = 33

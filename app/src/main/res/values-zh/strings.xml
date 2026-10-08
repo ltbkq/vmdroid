@@ -4,7 +4,7 @@
   Copyright (C) 2024-2026 Podroid contributors
 -->
 <resources>
-    <string name="app_name">Podroid</string>
+    <string name="app_name">VMDroid</string>
 
     <!-- VM Status -->
     <string name="vm_status">虚拟机状态</string>
@@ -79,7 +79,7 @@
     <string name="stop_vm_to_change">停止虚拟机后才能更改这些设置。</string>
     <string name="storage">存储</string>
     <string name="autostart_on_boot">开机时启动虚拟机</string>
-    <string name="autostart_on_boot_desc">手机启动后自动开启虚拟机。自动化应用也可以通过 com.excp.podroid.action.START_VM 和 STOP_VM 意图操作触发。</string>
+    <string name="autostart_on_boot_desc">手机启动后自动开启虚拟机。自动化应用也可以通过 io.github.ltbkq.vmdroid.action.START_VM 和 STOP_VM 意图操作触发。</string>
     <string name="reset_vm">重置虚拟机（删除所有数据）</string>
     <string name="reset_vm_description">完全重置应用？</string>
     <string name="reset_vm_text">这将清除所有应用数据，包括虚拟机存储、设置和端口规则。应用将关闭并恢复到刚安装时的状态。</string>
@@ -106,7 +106,7 @@
     <string name="avf_diagnostic">AVF (pKVM) 诊断</string>
     <string name="running_avf_diagnostic">运行 AVF 诊断…</string>
     <string name="probing_avf">正在探测…</string>
-    <string name="export_diagnostic_subject">Podroid 诊断日志</string>
+    <string name="export_diagnostic_subject">VMDroid 诊断日志</string>
     <string name="export_diagnostic_chooser">分享诊断日志</string>
     <string name="export_diagnostic_failed">导出失败：%1$s</string>
     <string name="unknown_error">未知错误</string>
@@ -134,7 +134,7 @@
     <string name="port_forwards_count">端口转发 (%1$d)</string>
     <string name="port_forwards_clean">全部清除</string>
     <string name="port_forwards_clean_confirm_title">移除所有端口转发？</string>
-    <string name="port_forwards_clean_confirm_body">这将移除全部 %1$d 条转发规则。Podroid 自身的转发（SSH、显示、音频）不受影响。</string>
+    <string name="port_forwards_clean_confirm_body">这将移除全部 %1$d 条转发规则。VMDroid 自身的转发（SSH、显示、音频）不受影响。</string>
     <string name="port_forwards_clean_confirm_btn">全部移除</string>
     <string name="none">无</string>
     <string name="active">活动</string>
@@ -180,7 +180,7 @@
     <string name="container_backup_tools">工具</string>
     <string name="container_backup_copy_list">复制列表命令</string>
     <string name="container_backup_copy_all">复制全部备份命令</string>
-    <string name="container_backup_terminal_hint">粘贴到 Podroid 终端。较新的客户机镜像包含 podroid-backup；旧镜像会自动回退到 podman export。</string>
+    <string name="container_backup_terminal_hint">粘贴到 VMDroid 终端。较新的客户机镜像包含 podroid-backup；旧镜像会自动回退到 podman export。</string>
     <string name="container_backup_on_phone">手机上的备份</string>
     <string name="container_backup_refresh">刷新列表</string>
     <string name="container_backup_none">Downloads/Podroid/backups 中尚未找到备份归档。</string>
@@ -202,7 +202,7 @@
     <!-- AVF Hint -->
     <string name="avf_available">此设备支持 AVF (KVM)</string>
     <string name="avf_hint_needs_pc">需要 PC 上的 adb，或设备上的 Shizuku 应用进行授权。运行一次：</string>
-    <string name="avf_grant_commands">adb shell pm grant com.excp.podroid \\\n  android.permission.MANAGE_VIRTUAL_MACHINE\nadb shell pm grant com.excp.podroid \\\n  android.permission.USE_CUSTOM_VIRTUAL_MACHINE</string>
+    <string name="avf_grant_commands">adb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.MANAGE_VIRTUAL_MACHINE\nadb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.USE_CUSTOM_VIRTUAL_MACHINE</string>
 
     <!-- Backend fallback (#66): AVF was forced but this device can't run it -->
     <string name="backend_fallback_suffix">（AVF 不可用，正在使用 QEMU）</string>
@@ -215,7 +215,7 @@
 
     <!-- Permissions -->
     <string name="permissions">权限</string>
-    <string name="permissions_description">Podroid 需要以下权限才能稳定运行虚拟机。</string>
+    <string name="permissions_description">VMDroid 需要以下权限才能稳定运行虚拟机。</string>
     <string name="permissions_needed">需要授权</string>
     <string name="perm_notifications_title">通知</string>
     <string name="perm_notifications_why">显示虚拟机状态，并可从通知栏停止虚拟机。</string>

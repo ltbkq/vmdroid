@@ -4,7 +4,7 @@
   Copyright (C) 2024-2026 Podroid contributors
 -->
 <resources>
-    <string name="app_name">Podroid</string>
+    <string name="app_name">VMDroid</string>
 
     <!-- VM Status -->
     <string name="vm_status">VM Status</string>
@@ -79,7 +79,7 @@
     <string name="stop_vm_to_change">Stop the VM to change these settings.</string>
     <string name="storage">Storage</string>
     <string name="autostart_on_boot">Start VM on boot</string>
-    <string name="autostart_on_boot_desc">Boot the VM automatically after the phone starts. Automation apps can also trigger it with the intent actions com.excp.podroid.action.START_VM and STOP_VM.</string>
+    <string name="autostart_on_boot_desc">Boot the VM automatically after the phone starts. Automation apps can also trigger it with the intent actions io.github.ltbkq.vmdroid.action.START_VM and STOP_VM.</string>
     <string name="reset_vm">Reset VM (deletes all data)</string>
     <string name="reset_vm_description">Full App Reset?</string>
     <string name="reset_vm_text">This will clear ALL application data, including your VM storage, settings, and port rules. The app will close and return to a freshly-installed state.</string>
@@ -106,7 +106,7 @@
     <string name="avf_diagnostic">AVF (pKVM) diagnostic</string>
     <string name="running_avf_diagnostic">Running AVF diagnostic…</string>
     <string name="probing_avf">Probing…</string>
-    <string name="export_diagnostic_subject">Podroid Diagnostic Log</string>
+    <string name="export_diagnostic_subject">VMDroid Diagnostic Log</string>
     <string name="export_diagnostic_chooser">Share diagnostic log</string>
     <string name="export_diagnostic_failed">Export failed: %1$s</string>
     <string name="unknown_error">unknown error</string>
@@ -134,7 +134,7 @@
     <string name="port_forwards_count">Port forwards (%1$d)</string>
     <string name="port_forwards_clean">Clean all</string>
     <string name="port_forwards_clean_confirm_title">Remove all port forwards?</string>
-    <string name="port_forwards_clean_confirm_body">This removes all %1$d forwarding rules. Podroid\'s own forwards (SSH, display, audio) are not affected.</string>
+    <string name="port_forwards_clean_confirm_body">This removes all %1$d forwarding rules. VMDroid\'s own forwards (SSH, display, audio) are not affected.</string>
     <string name="port_forwards_clean_confirm_btn">Remove all</string>
     <string name="none">None</string>
     <string name="active">active</string>
@@ -180,7 +180,7 @@
     <string name="container_backup_tools">Tools</string>
     <string name="container_backup_copy_list">Copy list command</string>
     <string name="container_backup_copy_all">Copy backup-all command</string>
-    <string name="container_backup_terminal_hint">Paste into the Podroid terminal. podroid-backup is included in newer guest images; older images fall back to podman export automatically.</string>
+    <string name="container_backup_terminal_hint">Paste into the VMDroid terminal. podroid-backup is included in newer guest images; older images fall back to podman export automatically.</string>
     <string name="container_backup_on_phone">Backups on phone</string>
     <string name="container_backup_refresh">Refresh list</string>
     <string name="container_backup_none">No backup archives found in Downloads/Podroid/backups yet.</string>
@@ -202,7 +202,7 @@
     <!-- AVF Hint -->
     <string name="avf_available">AVF (KVM) available on this device</string>
     <string name="avf_hint_needs_pc">Needs a PC with adb, or the Shizuku app for on-device grant. Run once:</string>
-    <string name="avf_grant_commands">adb shell pm grant com.excp.podroid \\\n  android.permission.MANAGE_VIRTUAL_MACHINE\nadb shell pm grant com.excp.podroid \\\n  android.permission.USE_CUSTOM_VIRTUAL_MACHINE</string>
+    <string name="avf_grant_commands">adb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.MANAGE_VIRTUAL_MACHINE\nadb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.USE_CUSTOM_VIRTUAL_MACHINE</string>
 
     <!-- Backend fallback (#66): AVF was forced but this device can't run it -->
     <string name="backend_fallback_suffix">" - AVF unavailable, running QEMU"</string>
@@ -215,7 +215,7 @@
 
     <!-- Permissions -->
     <string name="permissions">Permissions</string>
-    <string name="permissions_description">Podroid needs these to run the VM reliably.</string>
+    <string name="permissions_description">VMDroid needs these to run the VM reliably.</string>
     <string name="permissions_needed">Permissions needed</string>
     <string name="perm_notifications_title">Notifications</string>
     <string name="perm_notifications_why">Shows the VM\'s state and lets you stop it from the notification shade.</string>

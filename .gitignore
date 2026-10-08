@@ -75,3 +75,7 @@ app/src/main/jniLibs/
 
 # Visual companion (brainstorming sessions)
 .superpowers/
+
+# VMDroid codec selftest — generated (recreate: python3 codec-selftest/gen_fixtures.py)
+/codec-selftest/fixtures/
+/codec-selftest/out/

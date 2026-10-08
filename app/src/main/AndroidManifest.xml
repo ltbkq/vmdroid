@@ -62,7 +62,7 @@
     <!--
         Android Virtualization Framework (AVF / pKVM) opt-in. Both permissions
         are signature|*|development and can be granted to a side-loaded APK via
-        `adb shell pm grant com.excp.podroid <name>` on pKVM-capable devices
+        `adb shell pm grant io.github.ltbkq.vmdroid <name>` on pKVM-capable devices
         (Pixel 8/9/10 etc.). required="false" so the APK still installs on
         devices without AVF — runtime code falls back to QEMU/TCG.
     -->
@@ -73,7 +73,7 @@
     <uses-permission android:name="android.permission.USE_CUSTOM_VIRTUAL_MACHINE" />
 
     <application
-        android:name=".PodroidApplication"
+        android:name=".VmdroidApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:extractNativeLibs="true"
@@ -85,7 +85,7 @@
         android:usesCleartextTraffic="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Podroid">
+        android:theme="@style/Theme.Vmdroid">
 
         <!-- Main activity — single-activity Compose app -->
         <activity
@@ -93,7 +93,7 @@
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
             android:exported="true"
             android:launchMode="singleTop"
-            android:theme="@style/Theme.Podroid"
+            android:theme="@style/Theme.Vmdroid"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -103,7 +103,7 @@
                  Activity launch is always allowed to start a foreground
                  service, unlike a cold background receiver. -->
             <intent-filter>
-                <action android:name="com.excp.podroid.action.START_VM" />
+                <action android:name="io.github.ltbkq.vmdroid.action.START_VM" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -134,7 +134,7 @@
 
         <!-- Foreground service that hosts the QEMU process -->
         <service
-            android:name=".service.PodroidService"
+            android:name=".service.VmdroidService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
@@ -146,7 +146,7 @@
             Boot autostart + Tasker/automation entry point (#78). Exported
             without a permission on purpose: automation apps (Tasker etc.)
             cannot hold a custom signature permission, and the two custom
-            actions only start/stop the VM via PodroidService's own
+            actions only start/stop the VM via VmdroidService's own
             companion - there is nothing privileged for a permission to gate.
         -->
         <receiver
@@ -154,8 +154,8 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="com.excp.podroid.action.START_VM" />
-                <action android:name="com.excp.podroid.action.STOP_VM" />
+                <action android:name="io.github.ltbkq.vmdroid.action.START_VM" />
+                <action android:name="io.github.ltbkq.vmdroid.action.STOP_VM" />
             </intent-filter>
         </receiver>
 
