@@ -37,7 +37,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) {
-            handleStartVmIntent(intent)
+            handleVmControlIntent(intent)
         }
         setContent {
             val windowSizeClass = calculateWindowSizeClass(this)
@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleStartVmIntent(intent)
+        handleVmControlIntent(intent)
     }
 
     /**
@@ -107,10 +107,16 @@ class MainActivity : ComponentActivity() {
      * foreground, so this route is reliable on both cold start (onCreate,
      * only when there is no saved state to restore) and warm delivery
      * (onNewIntent).
+     *
+     * STOP_VM 挂在 manifest 的同一个 intent-filter 里与 START_VM 对称
+     * （FIXLIST ISSUE-12）：此前 Activity 只处理 START，`am start -a ...STOP_VM`
+     * 会被 onNewIntent **静默吞掉**，QEMU 继续运行而调用方以为已停机。
      */
-    private fun handleStartVmIntent(intent: Intent?) {
-        if (intent?.action == VmControlReceiver.ACTION_START_VM) {
-            VmdroidService.start(this)
+    private fun handleVmControlIntent(intent: Intent?) {
+        when (intent?.action) {
+            VmControlReceiver.ACTION_START_VM -> VmdroidService.start(this)
+            VmControlReceiver.ACTION_STOP_VM -> VmdroidService.stop(this)
+            else -> Unit
         }
     }
 }

@@ -151,7 +151,18 @@ build_qemu() {
     docker cp podroid-qemu-extract:/qemu/efi-virtio.rom        "$ASSETS/qemu/"
     docker cp podroid-qemu-extract:/qemu/keymaps/.             "$ASSETS/qemu/keymaps/"
     docker rm podroid-qemu-extract >/dev/null
-    
+
+    # FIXLIST ISSUE-02：x86 Android（NDK 翻译层）不认 LD_LIBRARY_PATH，exec 出来的
+    # QEMU 找不到同目录的 libslirp.so → CANNOT LINK EXECUTABLE。链接期已注入
+    # -Wl,-rpath,$ORIGIN（Dockerfile），这里对产物兜底再钉一次，保证 ELF 自带
+    # 依赖搜索路径（$ORIGIN = 可执行文件所在目录，即 APK 解出的 lib/arm64-v8a）。
+    if command -v patchelf >/dev/null 2>&1; then
+        patchelf --set-rpath '$ORIGIN' --page-size 16384 "$JNILIBS/libqemu-system-aarch64.so"
+        log "RPATH -> \$ORIGIN (patchelf, 16KB page-size preserved)"
+    else
+        warn "patchelf 未安装：跳过 RPATH 兜底（依赖 Dockerfile 的 -Wl,-rpath）"
+    fi
+
     verify_16kb_align "$JNILIBS/libqemu-system-aarch64.so"
     success "QEMU and bridge ready."
 }

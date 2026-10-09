@@ -159,5 +159,8 @@ fun buildImageRow(
  * §6.1 catalog 发布点。M4 在应用内断点续传（§6.2）落地前，「下载」入口先用
  * 浏览器打开 Release 页（`catalog.json` 与镜像资产同处发布，§6.1 注释处示例 URL）；
  * 下载完成后走「从文件导入 .img」。M4 接管后此入口改为应用内下载。
+ *
+ * FIXLIST ISSUE-01：镜像实际发布在 `ltbkq/vmdroid` 的镜像 Release（catalog.json
+ * 也发在这里，与资产同处），原 Podroid-Debian 链接 404。
  */
-const val CATALOG_RELEASES_URL = "https://github.com/ltbkq/Podroid-Debian/releases/latest"
+const val CATALOG_RELEASES_URL = "https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08"

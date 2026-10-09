@@ -101,7 +101,10 @@ class BootGuard(
         val active = store.active()
             ?: return BootGuardVerdict.reject(
                 BootGuardReason.NO_SYSTEM_IMAGE,
-                "no activation record (images/${SystemImageStore.ACTIVE_FILE}) — import or download an image first",
+                // FIXLIST ISSUE-07：错误必须可操作 —— 指明去哪、做什么、做完还差哪步。
+                "no system image active (missing images/${SystemImageStore.ACTIVE_FILE}) — " +
+                    "open System images, import a .img file or download one from the catalog, " +
+                    "then tap the image to activate it before starting the VM",
                 storagePresent,
             )
         if (!active.idValid) {

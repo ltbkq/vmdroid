@@ -35,8 +35,17 @@ class ImageCatalogRepository @Inject constructor(
     private val settings: SettingsRepository,
 ) {
     companion object {
-        /** §6.1 默认订阅（`latest/download` 每次 release 自动跟随）。 */
-        const val DEFAULT_URL = "https://github.com/ltbkq/Podroid-Debian/releases/latest/download/catalog.json"
+        /**
+         * §6.1 默认订阅。
+         *
+         * FIXLIST ISSUE-01：原值指向 `ltbkq/Podroid-Debian` 且镜像实际发布在
+         * `ltbkq/vmdroid`，页面恒 404。改为**固定 tag** 而不是 `releases/latest`：
+         * `latest` 永远是 APK Release（如 v1.3.0），用 `latest/download` 取镜像目录
+         * 必然 404；固定 tag 只在**镜像 Release 变更时**需要同步改这里
+         * （生成与签名见 distro-build/mkcatalog.sh）。
+         */
+        const val DEFAULT_URL =
+            "https://github.com/ltbkq/vmdroid/releases/download/system-images-2026.10.08/catalog.json"
 
         private const val TAG = "ImageCatalogRepo"
         private const val CONNECT_TIMEOUT_MS = 15_000

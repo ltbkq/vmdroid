@@ -159,11 +159,15 @@ class VmdroidApplication : Application() {
             //
             // The system image (rootfs) is NO LONGER an APK asset: it lives in
             // filesDir/images/ and is resolved through SystemImageRepository
-            // (DESIGN §7.3 — 3 asset tasks, rootfs extraction removed).
+            // (DESIGN §7.3 — rootfs extraction removed).
+            //
+            // FIXLIST ISSUE-05：`vmlinuz-virt` / `initrd.img` 也不再是 APK asset ——
+            // 内核与 initrd 现在从**激活镜像的 footer** 抽取（
+            // SystemImageRepository.extractBootPayloads()，见 QemuEngine 启动前的
+            // withContext(IO) 调用）。保留这两个任务只会每次启动都
+            // `FileNotFoundException` → stamp 永远写不上 → 每次启动都重跑整轮解包。
             val tasks: List<() -> Unit> = listOf(
                 { copyAssetDir("qemu", filesDir, forceCopy) },
-                { copyAssetIfNeeded("vmlinuz-virt", File(filesDir, "vmlinuz-virt"), forceCopy) },
-                { copyAssetIfNeeded("initrd.img", File(filesDir, "initrd.img"), forceCopy) },
             )
             val pool = Executors.newFixedThreadPool(tasks.size.coerceAtMost(4))
             var allSucceeded = true

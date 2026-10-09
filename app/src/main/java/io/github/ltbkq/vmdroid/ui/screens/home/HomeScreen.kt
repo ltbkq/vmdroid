@@ -135,6 +135,9 @@ fun HomeScreen(
     var permissionsGrantVersion by remember { mutableIntStateOf(0) }
     val missingPermissions = remember(permissionsGrantVersion) { AppPermissions.missing(context) }
     var permissionsCardDismissed by rememberSaveable { mutableStateOf(false) }
+    // FIXLIST ISSUE-06：通知是「从通知栏停掉 VM」的唯一入口之一，而 VM 正在跑时
+    // 用户一旦收起权限卡就再也看不到授权入口了 —— 运行期间强制保留权限卡。
+    val holdPermissionsCard = isRunning || isStarting || isStopping
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -270,11 +273,11 @@ fun HomeScreen(
                             .padding(end = VmdroidTokens.Spacing.XL2)
                             .verticalScroll(rememberScrollState()),
                     ) {
-                        if (missingPermissions.isNotEmpty() && !permissionsCardDismissed) {
+                        if (missingPermissions.isNotEmpty() && (!permissionsCardDismissed || holdPermissionsCard)) {
                             PermissionsNeededCard(
                                 permissions = missingPermissions,
                                 onGrant = ::grantPermission,
-                                onDismiss = { permissionsCardDismissed = true },
+                                onDismiss = { if (!holdPermissionsCard) permissionsCardDismissed = true },
                             )
                         }
                         if (showAvfHint) {
@@ -336,11 +339,11 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.MD),
                 ) {
                     Spacer(Modifier.height(VmdroidTokens.Spacing.XL))
-                    if (missingPermissions.isNotEmpty() && !permissionsCardDismissed) {
+                    if (missingPermissions.isNotEmpty() && (!permissionsCardDismissed || holdPermissionsCard)) {
                         PermissionsNeededCard(
                             permissions = missingPermissions,
                             onGrant = ::grantPermission,
-                            onDismiss = { permissionsCardDismissed = true },
+                            onDismiss = { if (!holdPermissionsCard) permissionsCardDismissed = true },
                         )
                     }
                     if (showAvfHint) {
@@ -566,6 +569,18 @@ private fun HomeStatusBlock(
             text = meta.resourcesLabel,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    // FIXLIST ISSUE-04：Running 只有两个来源 —— ①detector 抓到 "Ready!"
+    // (bootStage="Ready") ②120s 超时兜底（bootStage 被标 Timeout，但后续
+    // console 标记仍可能覆盖它）。所以判定用"Running 且从未确认 Ready"，
+    // 而不是依赖某个固定字符串；否则晚到的标记会让警告消失。
+    if (isRunning && bootStage != "Ready") {
+        Spacer(Modifier.height(VmdroidTokens.Spacing.SM))
+        Text(
+            text = stringResource(R.string.status_boot_timeout, bootStage.ifEmpty { "—" }),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
         )
     }
     if (avfNetWorkaroundFailed) {

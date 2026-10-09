@@ -11,6 +11,10 @@
     <string name="status_starting">Starting</string>
     <string name="status_running">Running</string>
     <string name="status_stopped">Stopped</string>
+    <!-- FIXLIST ISSUE-04：120s 没等到契约标记但仍有 console 输出时，状态是
+         Running + bootStage=Timeout —— 必须在状态卡上显式提示，不能让用户
+         误以为已经就绪。 -->
+    <string name="status_boot_timeout">Boot timeout — readiness not confirmed (stage: %1$s); the guest may still be starting</string>
     <string name="status_idle">Idle</string>
     <string name="status_stopping">Shutting down…</string>
     <string name="stopping_vm">Stopping the VM…</string>

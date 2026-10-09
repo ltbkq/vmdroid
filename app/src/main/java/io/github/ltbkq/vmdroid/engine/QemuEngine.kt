@@ -57,6 +57,20 @@ class QemuEngine @Inject constructor(
     private val _state = MutableStateFlow<VmState>(VmState.Idle)
     override val state: StateFlow<VmState> = _state.asStateFlow()
 
+    /**
+     * FIXLIST ISSUE-04：超时分支要报的错，**延后到 QEMU 退出那一刻**再发。
+     * 直接先置 Error 会被 VmdroidService 的 state 观察者立刻 teardown → start()
+     * 协程被取消 → `CancellationException` 分支把状态改写成 Stopped，错误卡一闪
+     * 而过（实测：日志有 "boot timeout"，UI 却停在 Stopped）。
+     */
+    @Volatile private var deferredError: VmState.Error? = null
+
+    override fun reportStartBlocked(detail: String) {
+        Log.w(TAG, "start blocked: $detail")
+        _bootStage.value = ""
+        _state.value = VmState.Error(detail)
+    }
+
     private val _consoleText = MutableStateFlow("")
     override val consoleText: StateFlow<String> = _consoleText.asStateFlow()
 
@@ -298,6 +312,7 @@ class QemuEngine @Inject constructor(
 
         _consoleText.value = ""
         _bootStage.value = "Starting QEMU..."
+        deferredError = null
         // Fresh per-run detector so a previous run's still-draining monitor can't
         // feed (or race the one-shot guard / scan offsets of) this run's detector.
         val detector = newBootStageDetector()
@@ -409,13 +424,30 @@ class QemuEngine @Inject constructor(
                     delay(BOOT_READY_SAFETY_MS)
                     if (_state.value is VmState.Starting &&
                         process?.isAlive == true && !cleanedUp.get()) {
-                        Log.w(TAG, "Ready! not detected within ${BOOT_READY_SAFETY_MS / 1000}s - " +
-                            "promoting to Running (boot detection may have missed the marker)")
-                        _bootStage.value = "Ready"
-                        persistBootDuration()
-                        _runningSinceMs = System.currentTimeMillis()
-                        _state.value = VmState.Running
-                        autoStartBridge()
+                        val consoleChars = _consoleText.value.length
+                        if (consoleChars == 0) {
+                            // FIXLIST ISSUE-04：控制台一个字节都没有 = 客户机压根没起
+                            //（x86 翻译层下 TCG 停滞即此症状）。此时必须报错并停机，
+                            // 不能像以前那样无条件 promote 成 Running 掩盖故障。
+                            Log.e(TAG, "boot timeout: no console output after " +
+                                "${BOOT_READY_SAFETY_MS / 1000}s — stopping QEMU")
+                            _bootStage.value = "Timeout"
+                            deferredError = VmState.Error(
+                                "启动超时：${BOOT_READY_SAFETY_MS / 1000}s 内控制台无任何输出（客户机未启动）"
+                            )
+                            process?.destroy()
+                        } else {
+                            // 有 console 输出只是没抓到契约标记：可能确实慢，也可能标记
+                            // 被吞。保留 Running（不打断用户），但 bootStage 如实标
+                            // "Timeout"，不再伪造 "Ready"。
+                            Log.w(TAG, "boot timeout: $consoleChars console chars but no Ready! " +
+                                "marker — promoting to Running (boot stage: Timeout, unverified)")
+                            _bootStage.value = "Timeout"
+                            persistBootDuration()
+                            _runningSinceMs = System.currentTimeMillis()
+                            _state.value = VmState.Running
+                            autoStartBridge()
+                        }
                     }
                 }
             }
@@ -425,7 +457,8 @@ class QemuEngine @Inject constructor(
             val exitCode = withContext(dispatcher) { proc.waitFor() }
             lastExitCode = exitCode
             Log.d(TAG, "QEMU exited: $exitCode")
-            val priorError = _state.value as? VmState.Error
+            val priorError = (_state.value as? VmState.Error) ?: deferredError
+            deferredError = null
             cleanup()
             // If the socket-timeout branch already set a specific Error, keep it
             // rather than overwriting with the generic signal-exit message.

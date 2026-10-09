@@ -88,6 +88,12 @@ class AvfEngine @Inject constructor(
     private val _state = MutableStateFlow<VmState>(VmState.Idle)
     override val state: StateFlow<VmState> = _state.asStateFlow()
 
+    override fun reportStartBlocked(detail: String) {
+        Log.w(TAG, "start blocked: $detail")
+        _bootStage.value = ""
+        _state.value = VmState.Error(detail)
+    }
+
     private val _bootStage = MutableStateFlow("")
     override val bootStage: StateFlow<String> = _bootStage.asStateFlow()
 

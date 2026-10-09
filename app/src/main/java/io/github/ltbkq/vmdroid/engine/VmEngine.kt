@@ -71,6 +71,13 @@ interface VmEngine {
     suspend fun start(portForwards: List<PortForwardRule>, config: VmConfig)
     fun stop()
 
+    /**
+     * 启动被 BootGuard 拒绝时，把拒绝原因写进 [state]（Home 错误卡）。
+     * FIXLIST ISSUE-07：此前只写日志 + teardown，用户看到的仍是 "Stopped"，
+     * 无从得知为什么起不来。默认 no-op（测试替身无需关心）。
+     */
+    fun reportStartBlocked(detail: String) {}
+
     /** Create (or return the pre-started) terminal session wired to the bridge. */
     fun createTerminalSession(client: TerminalSessionClient): TerminalSession
 

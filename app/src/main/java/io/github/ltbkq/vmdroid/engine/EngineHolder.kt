@@ -130,6 +130,14 @@ class EngineHolder @Inject constructor(
     // publish; set when start() runs.
     @Volatile private var startedEngine: VmEngine? = null
 
+    /**
+     * FIXLIST ISSUE-07：本周期被 BootGuard 拒绝、但从未 start() 过的引擎。
+     * [normalizeCycleState] 会把「未 start 的引擎」的终态归一成 Idle（防止上一轮
+     * 的陈旧 Error/Stopped 在换引擎后复活），拒绝原因必须显式放行，否则错误卡
+     * 永远显示不出来（实测：service 日志有、UI 仍 Stopped）。
+     */
+    @Volatile private var blockedEngine: VmEngine? = null
+
     init {
         // 0. Publish the real first pick as soon as it resolves off-main, so the
         //    delegate flows (state/bootStage/consoleText via flatMapLatest) and
@@ -309,6 +317,7 @@ class EngineHolder @Inject constructor(
             // Fresh selection: this engine has not been started this cycle, so its
             // surfaced state is normalized to Idle until start() runs.
             startedEngine = null
+            blockedEngine = null
             _currentFlow.value = first
         }
         _backendFallback.value = result.fallbackMessage
@@ -348,6 +357,7 @@ class EngineHolder @Inject constructor(
         // terminal state from a prior cycle; clear the marker so the state flow
         // surfaces Idle until this engine is started again.
         startedEngine = null
+        blockedEngine = null
         _currentFlow.value = next
     }
 
@@ -415,8 +425,16 @@ class EngineHolder @Inject constructor(
         launchRules = portForwards.toSet()
         val eng = current
         startedEngine = eng
+        blockedEngine = null
         eng.start(portForwards, config)
     }
+    // FIXLIST ISSUE-07：holder 是转发层 —— 不显式转发的话，接口的默认空实现
+    // 会把 BootGuard 的拒绝原因整个吞掉（实测：service 日志有、UI 仍显示 Stopped）。
+    override fun reportStartBlocked(detail: String) {
+        blockedEngine = current
+        current.reportStartBlocked(detail)
+    }
+
     override fun stop() = current.stop()
     override fun createTerminalSession(client: TerminalSessionClient) =
         current.createTerminalSession(client)
@@ -434,7 +452,9 @@ class EngineHolder @Inject constructor(
      * and every state of the started engine, passes through unchanged.
      */
     private fun normalizeCycleState(eng: VmEngine, st: VmState): VmState =
-        if (eng !== startedEngine && (st is VmState.Stopped || st is VmState.Error)) {
+        if (eng !== startedEngine && eng !== blockedEngine &&
+            (st is VmState.Stopped || st is VmState.Error)
+        ) {
             VmState.Idle
         } else {
             st

@@ -101,9 +101,12 @@
             </intent-filter>
             <!-- Foreground-launch path for automation (#78 fix round): an
                  Activity launch is always allowed to start a foreground
-                 service, unlike a cold background receiver. -->
+                 service, unlike a cold background receiver.
+                 START_VM 与 STOP_VM 必须对称（FIXLIST ISSUE-12）：只挂 START 会让
+                 `am start -a ...STOP_VM` 落到 onNewIntent 后被静默吞掉。 -->
             <intent-filter>
                 <action android:name="io.github.ltbkq.vmdroid.action.START_VM" />
+                <action android:name="io.github.ltbkq.vmdroid.action.STOP_VM" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>

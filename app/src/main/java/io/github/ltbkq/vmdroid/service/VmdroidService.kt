@@ -424,6 +424,9 @@ class VmdroidService : Service() {
                     val verdict = guard.checkBeforeStart()
                     if (!verdict.ok) {
                         Log.w(TAG, "BootGuard blocked start: ${verdict.reasonName} — ${verdict.detail}")
+                        // FIXLIST ISSUE-07：把拒绝原因同步到引擎状态，让 Home 错误卡
+                        // 显示可操作指引（否则用户只看到 "Stopped"，不知道为什么没起来）。
+                        engine.reportStartBlocked(verdict.detail)
                         systemImageRepository.imageLog.record(
                             "bootguard_reject",
                             guard.rejectFields(verdict),
