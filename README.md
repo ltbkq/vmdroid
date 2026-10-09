@@ -8,10 +8,14 @@
 > The Chinese docs are the **primary** source; the English README is a
 > **secondary** translation and may lag. In case of conflict, the Chinese wins.
 
-规格与设计 [docs/DESIGN.md](docs/DESIGN.md) · 镜像格式 [docs/IMAGE-FORMAT.md](docs/IMAGE-FORMAT.md) · 评审规程 [docs/REVIEW.md](docs/REVIEW.md) ·
+规格与设计 [docs/DESIGN.md](docs/DESIGN.md) ·
+镜像格式 [docs/IMAGE-FORMAT.md](docs/IMAGE-FORMAT.md) ·
+评审规程 [docs/REVIEW.md](docs/REVIEW.md) ·
 测试与整改 [docs/TESTPLAN-system-images.md](docs/TESTPLAN-system-images.md) / [docs/FIXLIST-system-images.md](docs/FIXLIST-system-images.md)
 
-**下载**：[APK Release `v1.3.0`](https://github.com/ltbkq/vmdroid/releases/tag/v1.3.0) · [系统镜像 Release `system-images-2026.10.08`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08)
+**下载**：[APK Release `v1.3.0`](https://github.com/ltbkq/vmdroid/releases/tag/v1.3.0) ·
+
+[系统镜像 Release `system-images-2026.10.08`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08)
 
 ## 核心目的
 
