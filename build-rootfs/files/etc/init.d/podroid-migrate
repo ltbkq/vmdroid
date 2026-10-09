@@ -1,0 +1,68 @@
+#!/sbin/openrc-run
+description="Podroid system migrations (runs versioned upgrade scripts once)"
+
+# Run early, before the rest of Podroid bringup, so migrations can prepare state
+# the other services rely on. localmount is already satisfied (initramfs mounted
+# /mnt/persist), but we declare it for ordering correctness.
+depend() {
+    need localmount
+    before podroid-bootstrap
+}
+
+SYSVER_FILE="/etc/podroid/system-version"
+APPLIED_FILE="/mnt/persist/.podroid/applied-version"
+MIGRATIONS_DIR="/etc/podroid/migrations"
+
+start() {
+    ebegin "Running Podroid migrations"
+    mkdir -p /mnt/persist/.podroid
+
+    current=$(cat "$SYSVER_FILE" 2>/dev/null || echo 0)
+    applied=$(cat "$APPLIED_FILE" 2>/dev/null || echo "")
+
+    # Fresh install (no marker): seed the marker, run nothing — the squashfs
+    # already ships the current state.
+    if [ -z "$applied" ]; then
+        printf '%s\n' "$current" > "$APPLIED_FILE.tmp" && mv "$APPLIED_FILE.tmp" "$APPLIED_FILE"
+        eend 0
+        return 0
+    fi
+
+    # Fast path / downgrade: nothing to do.
+    if [ "$current" -le "$applied" ] 2>/dev/null; then
+        eend 0
+        return 0
+    fi
+
+    # Run each migrations/<v>.sh with applied < v <= current, in ascending
+    # numeric order (sort the basenames, not full paths). Scripts MUST be
+    # idempotent (a crash mid-run re-runs them next boot). Stop at the first
+    # failure so the failed script and any after it re-run next boot instead
+    # of being marked applied.
+    last_ok="$applied"
+    failed=0
+    for base in $(ls "$MIGRATIONS_DIR" 2>/dev/null | sed -n 's/\.sh$//p' | sort -n); do
+        case "$base" in *[!0-9]*) continue ;; esac   # digits only
+        if [ "$base" -gt "$applied" ] 2>/dev/null && [ "$base" -le "$current" ] 2>/dev/null; then
+            echo "podroid-migrate: applying $base" > /dev/console
+            if sh "$MIGRATIONS_DIR/$base.sh" > /dev/console 2>&1; then
+                last_ok="$base"
+            else
+                echo "podroid-migrate: $base failed, stopping (will retry next boot)" > /dev/console
+                failed=1
+                break
+            fi
+        fi
+    done
+
+    # Advance the marker atomically: to current if the loop completed with no
+    # failure, otherwise to the last successfully applied version (unchanged
+    # if none succeeded), never past a failure.
+    if [ "$failed" -eq 0 ]; then
+        marker="$current"
+    else
+        marker="$last_ok"
+    fi
+    printf '%s\n' "$marker" > "$APPLIED_FILE.tmp" && mv "$APPLIED_FILE.tmp" "$APPLIED_FILE"
+    eend 0
+}

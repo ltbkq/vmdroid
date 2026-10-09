@@ -1,0 +1,32 @@
+#!/bin/sh
+# Wrapper for inittab's per-tty getty lines. Two gettys (hvc0 + ttyS0) are
+# declared because the backend isn't known at squashfs-build time; this
+# script picks the right one at boot via the kernel cmdline marker:
+#
+#   podroid.tty=hvc0   QEMU/TCG backend (virtio-console)
+#   podroid.tty=hvc0   AVF/pKVM backend: AvfEngine boots with console=hvc0
+#                      and emits podroid.tty=hvc0; crosvm's virtio-console is
+#                      the AVF console with an input side. (The ttyS0 inittab
+#                      line just parks via the wrong-tty sleep below.)
+#
+# If the marker is absent, default to hvc0 - that's QEMU's historical setup
+# so legacy boots without the marker still get a login.
+TTY="$1"
+WANT=$(sed -n 's/.*podroid\.tty=\([a-zA-Z0-9]*\).*/\1/p' /proc/cmdline)
+[ -z "$WANT" ] && WANT=hvc0
+
+if [ "$TTY" = "$WANT" ]; then
+    # Clear the tty before the login prompt. On AVF the kernel console is this
+    # same hvc0 (console=hvc0), so boot-stage markers written to /dev/console
+    # (podroid-ready's "Almost ready..."/"Ready!", etc.) land in the interactive
+    # terminal above the banner. The boot detector already consumed them from the
+    # console stream, so wiping the visible screen + scrollback here just gives a
+    # clean login. No-op-ish on QEMU, where the console is a separate serial tty.
+    printf '\033[3J\033[2J\033[H' > "/dev/$TTY" 2>/dev/null
+    exec /sbin/getty -L -l /usr/local/bin/podroid-login 115200 "$TTY" xterm-256color
+fi
+
+# Wrong tty for this backend. Sleep instead of exiting so busybox init
+# doesn't throttle us with "respawning too fast" - the inittab line will
+# just stay parked until shutdown.
+exec sleep 2147483647

@@ -1,0 +1,16 @@
+Podroid migration scripts.
+
+podroid-migrate (OpenRC) runs each <version>.sh here exactly once, when the
+guest upgrades across that version: it executes every <v>.sh with
+  applied-version < v <= system-version
+in ascending numeric order, then records system-version as the new
+applied-version. <version> is the app versionCode the change shipped in.
+
+Rules:
+  - Name files <versionCode>.sh (digits only), e.g. 27.sh.
+  - Scripts MUST be idempotent: a crash mid-migration re-runs them next boot,
+    and a fresh install never runs them at all (it seeds the marker instead).
+  - Use for imperative fixups a file-union can't express, e.g.:
+      rc-update -u add my-new-service default   # enable a newly-added service
+      rm -f /etc/something-deprecated.conf       # retire a stale config
+  - Do NOT delete user data. Keep them small and reversible-in-spirit.

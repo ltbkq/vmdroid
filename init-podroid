@@ -1,0 +1,134 @@
+#!/bin/sh
+# Podroid initramfs bootstrap — mounts overlay, switch_root to /sbin/init.
+# All system bringup logic now lives in /etc/init.d/podroid-* services
+# on the Alpine squashfs.
+set -e
+
+# Ensure mount points exist (defensive: cpio packing can omit empty dirs).
+mkdir -p /proc /sys /dev /run
+
+echo "[podroid-init] mounting virtual filesystems" > /dev/console
+
+# Place -o BEFORE the device and mountpoint arguments.
+# util-linux's getopt stops processing options at the first non-option
+# argument when POSIXLY_CORRECT is set; options placed after the mountpoint
+# are then treated as extra positional args, not flags, which can result in
+# the mount(2) syscall being called with flags=0 and returning EPERM,
+# producing "must be superuser to use mount" even for root.
+mount -t proc    -o noexec,nosuid,nodev     proc      /proc
+echo "[podroid-init] mounted /proc" > /dev/console
+mount -t sysfs   -o noexec,nosuid,nodev     sysfs     /sys
+echo "[podroid-init] mounted /sys" > /dev/console
+
+# CONFIG_DEVTMPFS_MOUNT=y causes the kernel to pre-mount devtmpfs at /dev
+# before executing /init.  A second mount(2) there can return EBUSY, and
+# size= is not a valid option for devtmpfs in kernels where it is backed by
+# ramfs rather than tmpfs, causing EINVAL.  Either failure exits util-linux
+# with MNT_EX_FAIL=32; set -e then propagates exit(32), which the kernel
+# encodes as exitcode=0x00002000 ("Attempted to kill init!").
+# The kernel's pre-populated /dev is sufficient; || true makes this non-fatal.
+mount -t devtmpfs -o exec,nosuid,mode=0755  devtmpfs  /dev || true
+echo "[podroid-init] mounted /dev (or reused kernel pre-mount)" > /dev/console
+
+echo "Mounting storage..." > /dev/console
+
+# virtio_blk is built-in; modprobe is a no-op safety net
+[ -d "/lib/modules/$(uname -r)" ] && { depmod -a 2>/dev/null; modprobe virtio_blk 2>/dev/null; }
+
+# /dev/vda = persistent ext4 (user data, container storage)
+# /dev/vdb = read-only Alpine squashfs (system files)
+mkdir -p /mnt/persist /mnt/lower /mnt/overlay
+
+# Bounded wait for the virtio block nodes: on most boots they already exist
+# (loop breaks on the first iteration), but a slow virtio_blk probe can lag
+# behind init. Cap the wait so a genuinely-missing node still drops to the
+# FATAL diagnostics below instead of hanging forever.
+for _i in $(seq 1 30); do
+    [ -b /dev/vda ] && [ -b /dev/vdb ] && break
+    sleep 0.1
+done
+
+# Persistent: format on first boot if needed.
+# noatime: stop atime writes on every read.
+# commit=1: journal commits every 1s (vs ext4's 5s default) so an abrupt
+#   VM kill (Stop/Restart) loses at most ~1s of writes. QEMU has no per-stop
+#   guest-sync channel, so this commit window is what bounds its data loss;
+#   the AVF backend additionally issues an explicit sync before stopping.
+# barrier=1: write barriers ON so ext4's journal ordering is durable. The
+#   guest's flushes reach storage.img through QEMU's writeback cache, which
+#   honors flushes, keeping the on-disk journal consistent for recovery.
+if ! mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vda /mnt/persist 2>/dev/null; then
+    # The first mount failed. e2fsck searches the backup superblocks by itself
+    # when the primary is damaged. Exit codes: 0 clean, 1 corrected, 2 corrected
+    # (reboot advised), 4 uncorrected, >=8 no usable filesystem or operational
+    # error. Never reformat a disk e2fsck could read: only a brand-new, all-zero
+    # storage.img (first boot) gets mkfs.
+    rc=0
+    e2fsck -y /dev/vda > /dev/console 2>&1 || rc=$?
+    if [ "$rc" -ge 8 ] && [ -z "$(dd if=/dev/vda bs=1M count=1 2>/dev/null | tr -d '\000' | head -c 1)" ]; then
+        mkfs.ext4 -q -F /dev/vda
+    elif [ "$rc" -ge 4 ]; then
+        echo "FATAL: persistent ext4 (/dev/vda) could not be repaired (e2fsck rc=$rc); not reformatting, to keep the data" > /dev/console
+        exec sh
+    fi
+    mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vda /mnt/persist \
+        || { echo "FATAL: persistent ext4 (/dev/vda) mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
+fi
+
+# Android grows storage.img in place when the user raises the storage size;
+# the ext4 inside still has its old size until it is resized. Online resize is
+# a no-op when nothing changed and must never stop the boot.
+resize2fs /dev/vda >/dev/null 2>&1 \
+    || echo "WARN: resize2fs /dev/vda failed; storage keeps its previous size" > /dev/console
+
+echo "Mounting system..." > /dev/console
+mount -t squashfs -o ro /dev/vdb /mnt/lower \
+    || { echo "FATAL: squashfs (/dev/vdb) mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
+
+mkdir -p /mnt/persist/upper /mnt/persist/work /mnt/persist/.podroid \
+    || { echo "FATAL: mkdir overlay upper/work failed" > /dev/console; exec sh; }
+
+# One-time legacy-overlay normalization: older versions mounted the overlay with
+# metacopy=on,redirect_dir=on,index=on, which bind the upper to the OLD lower.
+# We now use a PLAIN overlay (below), so before stacking we strip that legacy
+# metadata from the upper using the normalizer shipped in the (new) squashfs.
+# No-op on a fresh or already-normalized upper. Guarded so it runs at most once.
+if [ ! -f /mnt/persist/.podroid/normalized ]; then
+    echo "Normalizing overlay (one-time)..." > /dev/console
+    /mnt/lower/usr/local/bin/podroid-overlay-normalize /mnt/persist/upper /mnt/persist/work > /dev/console 2>&1 || true
+    : > /mnt/persist/.podroid/normalized
+fi
+
+echo "Stacking overlay..." > /dev/console
+# PLAIN overlay (no metacopy/redirect_dir/index): tolerates a swapped lower, so a
+# new release's squashfs goes live on the next boot with the upper preserved.
+mount -t overlay overlay \
+    -o lowerdir=/mnt/lower,upperdir=/mnt/persist/upper,workdir=/mnt/persist/work \
+    /mnt/overlay \
+    || { echo "FATAL: overlay mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
+
+# Move /mnt/persist into the new root so users can reach raw storage,
+# and so switch_root can fully clear initramfs (no orphan mounts left
+# under /mnt that would block its unlink pass).
+mkdir -p /mnt/overlay/mnt/persist \
+    || { echo "FATAL: mkdir /mnt/overlay/mnt/persist failed" > /dev/console; exec sh; }
+mount --move /mnt/persist /mnt/overlay/mnt/persist \
+    || { echo "FATAL: mount --move /mnt/persist failed" > /dev/console; exec sh; }
+
+# Move /mnt/lower (the squashfs) too — keeps /dev/vdb mount visible in the
+# new root, and lets initramfs cleanup unlink /mnt cleanly.
+mkdir -p /mnt/overlay/mnt/lower \
+    || { echo "FATAL: mkdir /mnt/overlay/mnt/lower failed" > /dev/console; exec sh; }
+mount --move /mnt/lower /mnt/overlay/mnt/lower \
+    || { echo "FATAL: mount --move /mnt/lower failed" > /dev/console; exec sh; }
+
+# Move our early mounts into the new root so OpenRC inherits them
+mount --move /proc /mnt/overlay/proc \
+    || { echo "FATAL: mount --move /proc failed" > /dev/console; exec sh; }
+mount --move /sys  /mnt/overlay/sys \
+    || { echo "FATAL: mount --move /sys failed" > /dev/console; exec sh; }
+mount --move /dev  /mnt/overlay/dev \
+    || { echo "FATAL: mount --move /dev failed" > /dev/console; exec sh; }
+
+echo "[podroid-init] switching to real root" > /dev/console
+exec /sbin/switch_root /mnt/overlay /sbin/init

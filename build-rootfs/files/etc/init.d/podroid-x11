@@ -1,0 +1,116 @@
+#!/sbin/openrc-run
+description="Podroid X11 server (Xvnc + pulseaudio) for in-app viewer"
+
+depend() {
+    # Xvnc binds 127.0.0.1:5900 and pulseaudio 0.0.0.0:4713, both loopback,
+    # neither needs eth0/default-route. Order after networking but don't let a
+    # podroid-network failure (slow NIC, probe timeout) needlessly kill the GUI.
+    need podroid-bootstrap
+    after podroid-network
+    before podroid-ready
+}
+
+XVNC_DISPLAY=:0
+XVNC_GEOMETRY=1280x720
+XVNC_PORT=5900
+PA_PORT=4713
+PA_RUNTIME=/run/podroid-pulse
+PA_LOGFILE=/var/log/pulse.log
+XVNC_LOGFILE=/var/log/xvnc.log
+
+start() {
+    ebegin "Starting X11 server (Xvnc + pulseaudio)"
+
+    # Read per-boot DPI from the kernel cmdline token written by the Android app.
+    # Digit-only capture: /proc/cmdline ends in '\n', and an `awk -v RS=' '`
+    # parse would keep that newline on the last token, so Xvnc rejects -dpi.
+    XVNC_DPI=$(sed -n 's/.*podroid\.x11\.dpi=\([0-9]*\).*/\1/p' /proc/cmdline 2>/dev/null)
+    [ -z "$XVNC_DPI" ] && XVNC_DPI=96
+
+    # /tmp lives on the persistent ext4 overlay, so a stale X server lock
+    # from a previous boot will block Xvnc with "Server is already active
+    # for display 0". Wipe both the .X0-lock file and the X11 unix socket
+    # so Xvnc starts clean every boot.
+    rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+
+    mkdir -p "$PA_RUNTIME"
+    chmod 755 "$PA_RUNTIME"
+
+    # Xvnc: combined X server + RFB. No auth, listens on 5900.
+    # -SecurityTypes None is fine because the listening socket only sees
+    # SLIRP loopback traffic; the host (phone) reaches it via 127.0.0.1.
+    start-stop-daemon --start --background \
+        --pidfile /run/xvnc.pid --make-pidfile \
+        --stdout "$XVNC_LOGFILE" --stderr "$XVNC_LOGFILE" \
+        --exec /usr/bin/Xvnc -- \
+        $XVNC_DISPLAY \
+        -geometry $XVNC_GEOMETRY \
+        -depth 24 \
+        -SecurityTypes None \
+        -localhost no \
+        -rfbport $XVNC_PORT \
+        -AlwaysShared \
+        -dpi $XVNC_DPI \
+        -AcceptSetDesktopSize
+    _xvnc_rc=$?
+    # --background returns 0 once the child is forked, even if it dies an
+    # instant later (bad -geometry, port already bound). Poll the pidfile's
+    # PID instead of a fixed sleep: a healthy daemon is confirmed alive on the
+    # first ~0.1s tick and we stop; a crash-on-launch leaves no live PID, so
+    # all ticks miss and the final kill -0 flips the rc. Caps at ~1s.
+    if [ "$_xvnc_rc" -eq 0 ]; then
+        _xvnc_pid=$(cat /run/xvnc.pid 2>/dev/null)
+        _i=0
+        while [ "$_i" -lt 10 ]; do
+            sleep 0.1
+            kill -0 "$_xvnc_pid" 2>/dev/null && break
+            _i=$((_i + 1))
+        done
+        kill -0 "$_xvnc_pid" 2>/dev/null || _xvnc_rc=1
+    fi
+    [ "$_xvnc_rc" -eq 0 ] || ewarn "Xvnc failed to start (see $XVNC_LOGFILE)"
+
+    # PulseAudio: system-wide-style daemon writing raw S16LE PCM to TCP 4713.
+    # We use --system=no with explicit XDG_RUNTIME_DIR so it runs as root
+    # without tripping pulse's "system mode is risky" refusal.
+    PULSE_RUNTIME_PATH="$PA_RUNTIME" \
+    XDG_RUNTIME_DIR="$PA_RUNTIME" \
+    start-stop-daemon --start --background \
+        --pidfile /run/pulseaudio.pid --make-pidfile \
+        --stdout "$PA_LOGFILE" --stderr "$PA_LOGFILE" \
+        --exec /usr/bin/pulseaudio -- \
+        --daemonize=no \
+        --disallow-exit \
+        --exit-idle-time=-1 \
+        --load="module-null-sink sink_name=podroid_sink rate=44100 channels=2 format=s16le" \
+        --load="module-simple-protocol-tcp source=podroid_sink.monitor record=true rate=44100 format=s16le channels=2 listen=0.0.0.0 port=$PA_PORT" \
+        --load="module-native-protocol-unix"
+    _pa_rc=$?
+    # Same liveness poll as Xvnc: --background hides an immediate crash
+    # (missing module, port 4713 already bound). A healthy daemon breaks out
+    # on the first ~0.1s tick; an instant crash misses every tick and the
+    # final kill -0 flips the rc.
+    if [ "$_pa_rc" -eq 0 ]; then
+        _pa_pid=$(cat /run/pulseaudio.pid 2>/dev/null)
+        _i=0
+        while [ "$_i" -lt 10 ]; do
+            sleep 0.1
+            kill -0 "$_pa_pid" 2>/dev/null && break
+            _i=$((_i + 1))
+        done
+        kill -0 "$_pa_pid" 2>/dev/null || _pa_rc=1
+    fi
+    [ "$_pa_rc" -eq 0 ] || ewarn "pulseaudio failed to start (see $PA_LOGFILE)"
+
+    # eend reflects either daemon failing: a single `eend $?` would have
+    # masked a dead Xvnc behind a healthy pulseaudio (or vice-versa).
+    [ "$_xvnc_rc" -eq 0 ] && [ "$_pa_rc" -eq 0 ]
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping X11 server"
+    start-stop-daemon --stop --pidfile /run/xvnc.pid 2>/dev/null
+    start-stop-daemon --stop --pidfile /run/pulseaudio.pid 2>/dev/null
+    eend 0
+}

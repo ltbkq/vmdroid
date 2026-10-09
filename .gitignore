@@ -1,0 +1,87 @@
+# Build outputs
+/build/
+/app/build/
+/terminal-emulator/build/
+/terminal-view/build/
+*.apk
+*.aab
+
+# Gradle
+.gradle/
+local.properties
+
+# IDE
+/.idea/
+*.iml
+.DS_Store
+
+# Kotlin
+.kotlin/
+
+# Native build
+.externalNativeBuild/
+.cxx/
+
+# QEMU build artifacts (built separately)
+/qemu-src/
+/qemu-build/
+
+# Docker/initramfs build intermediates
+/alpine-rootfs/
+/config-temp/
+*.tar.gz
+config.log
+
+# Generated assets (built by docker-build-initramfs.sh)
+app/src/main/assets/vmlinuz-virt
+app/src/main/assets/initrd.img
+app/src/main/assets/alpine-rootfs.squashfs
+app/src/main/jniLibs/arm64-v8a/libqemu-system-aarch64.so
+app/src/main/jniLibs/arm64-v8a/libslirp.so
+app/src/main/jniLibs/arm64-v8a/libpodroid-bridge.so
+
+# Local planning / scratch dirs
+docs/superpowers/
+
+# Claude Code sessions
+.claude/
+
+# Misc
+*.tmp
+/captures/
+app/src/main/jniLibs/
+
+# Alpine Linux rootfs directories (generated during Docker build)
+/bin/
+/etc/
+/lib/
+/sbin/
+/usr/
+/var/
+/dev/
+/home/
+/media/
+/mnt/
+/opt/
+/proc/
+/root/
+/run/
+/srv/
+/sys/
+/tmp/
+
+# Release signing keystore — never commit
+/podroid-release.jks
+
+# Visual companion (brainstorming sessions)
+.superpowers/
+
+# VMDroid codec selftest — generated (recreate: python3 codec-selftest/gen_fixtures.py)
+/codec-selftest/fixtures/
+/codec-selftest/out/
+
+# VMDroid systemimage selftest — generated
+#   fixtures: python3 systemimage-selftest/gen_fixtures.py
+#   out/:     kotlinc jar + classes (~88 MB, -include-runtime bundles a JRE)
+/systemimage-selftest/fixtures/
+/systemimage-selftest/out/

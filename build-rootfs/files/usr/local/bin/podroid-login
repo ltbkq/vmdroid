@@ -1,0 +1,23 @@
+#!/bin/sh
+# Replacement login shell for getty. Restores the terminal size from
+# /run/term_size (written by podroid-resize on QEMU) before exec'ing the
+# real login binary — virtio-console + PL011 serial both reset winsize
+# to 0x0 on every getty respawn, so without this TUI apps (btop, htop,
+# vim, less) bail with "Failed to get size of terminal".
+#
+# AVF doesn't run podroid-resize for ttyS0 (no SIGWINCH propagation
+# channel yet), so /run/term_size won't exist there — fall back to a
+# sensible default rather than leaving winsize at 0x0. The host-side
+# TerminalView will overwrite this the moment the user touches the
+# screen and triggers a real SIGWINCH.
+_r=""
+_c=""
+if [ -r /run/term_size ]; then
+    read _r _c < /run/term_size
+fi
+# Reject empty, non-numeric, and 0 (a 0x0 winsize is the exact failure this
+# script exists to prevent: TUIs bail "Failed to get size of terminal").
+case "$_r" in ''|*[!0-9]*|0) _r=24;; esac
+case "$_c" in ''|*[!0-9]*|0) _c=80;; esac
+stty rows "$_r" cols "$_c" 2>/dev/null
+exec /bin/login "$@"

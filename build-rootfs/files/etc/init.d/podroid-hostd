@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+description="Podroid guest -> Android host bridge (notify/forward)"
+pidfile="/run/podroid-hostd.pid"
+
+depend() {
+    need podroid-bootstrap
+    before podroid-ready
+}
+
+start() {
+    ebegin "Starting podroid-hostd"
+    start-stop-daemon --start --background \
+        --make-pidfile --pidfile "$pidfile" \
+        --stdout /var/log/podroid-hostd.log \
+        --stderr /var/log/podroid-hostd.log \
+        --exec /usr/local/bin/podroid-hostd
+    eend $?
+}
+
+stop() {
+    if [ -f "$pidfile" ]; then
+        ebegin "Stopping podroid-hostd"
+        start-stop-daemon --stop --pidfile "$pidfile"
+        rm -f "$pidfile"
+        eend $?
+    fi
+}

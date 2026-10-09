@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Desktops &amp; the X11 viewer · Podroid docs</title>
+  <meta name="description" content="Run an X11 Linux desktop inside Podroid and view it with the built-in VNC viewer. Covers setup-desktop, supported DEs, viewer settings, and known limitations." />
+  <link rel="icon" type="image/png" href="../logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav>
+    <a class="nav-logo" href="../index.html"><img src="../logo.png" alt="Podroid" />Podroid</a>
+    <button class="menu-toggle" aria-label="Toggle menu">&#9776;</button>
+    <ul class="nav-links">
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="index.html" class="cta">Docs</a></li>
+      <li><a href="https://github.com/ExTV/Podroid">GitHub</a></li>
+    </ul>
+  </nav>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <h4>Getting started</h4>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="getting-started.html">Getting started</a></li>
+        <li><a href="how-it-works.html">How it works</a></li>
+      </ul>
+      <h4>Going deeper</h4>
+      <ul>
+        <li><a href="performance.html">Performance &amp; why it's slow</a></li>
+        <li><a href="backends.html">Backends: QEMU &amp; AVF</a></li>
+        <li><a href="networking.html">Networking &amp; ports</a></li>
+        <li><a href="packages.html">Packages &amp; services</a></li>
+        <li><a href="migrations.html">Updates &amp; migrations</a></li>
+        <li><a href="desktop.html" class="active">Desktops &amp; X11 viewer</a></li>
+        <li><a href="settings.html">Terminal &amp; settings</a></li>
+      </ul>
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="limitations.html">Limitations &amp; troubleshooting</a></li>
+        <li><a href="use-cases.html">Use cases</a></li>
+      </ul>
+    </aside>
+
+    <main class="content">
+      <h1>Desktops &amp; the X11 viewer</h1>
+      <p class="lead">Podroid includes a built-in VNC viewer that connects to <strong>Xvnc</strong> running inside the VM on display <code>:0</code> (port 5900, auto-forwarded). Tap the monitor icon in the terminal's top bar to open it.</p>
+
+      <h2>Installing a desktop</h2>
+      <p>Alpine ships <code>setup-desktop</code> as part of the <code>alpine-conf</code> package. It is an interactive helper that creates a user and installs a desktop environment of your choice. Run it in the Podroid terminal:</p>
+      <pre><code><span class="p">#</span> setup-desktop</code></pre>
+      <p>Follow the prompts to pick a desktop and create a user account. The script handles the <code>apk add</code> steps for you.</p>
+
+      <div class="callout note">
+        <span class="label">What setup-desktop also does</span>
+        <p><code>setup-desktop</code> installs <code>lightdm</code> with a greeter and enables it (<code>rc-update add lightdm</code>), and the Xfce and MATE choices also pull in Firefox, so the download is a good deal larger than the minimal example below. In Podroid the display manager is harmless but useless: the guest kernel has no graphics device, so <code>lightdm</code> starts at boot and idles without ever launching an X server, while Xvnc keeps display <code>:0</code>. Run <code>rc-update del lightdm</code> afterwards to keep boot clean, or use the "Complete example" section below for the minimal <code>apk add</code> route instead.</p>
+      </div>
+
+      <div class="callout warn">
+        <span class="label">X11 only - Wayland desktops will not appear</span>
+        <p>The built-in viewer speaks RFB (VNC), so it connects to an X11 display. It cannot show a Wayland compositor. Use <strong>Xfce, LXQt, or MATE</strong> - they run on X11 and render correctly. <strong>KDE Plasma 6, GNOME, and Sway are Wayland on Alpine</strong> and will not appear in the viewer, even after launching them.</p>
+      </div>
+
+      <h2>Launching a desktop</h2>
+      <p>You do not need a display manager. Xvnc is already the X server on <code>:0</code>, and <code>DISPLAY=:0</code> is preset in the environment. After installing a desktop, start it directly from the terminal:</p>
+      <pre><code><span class="c"># Xfce example</span>
+<span class="p">$</span> startxfce4 &amp;
+
+<span class="c"># LXQt example</span>
+<span class="p">$</span> startlxqt &amp;
+
+<span class="c"># MATE example</span>
+<span class="p">$</span> mate-session &amp;</code></pre>
+
+      <div class="callout warn">
+        <span class="label">Do not install or enable a display manager</span>
+        <p>Xvnc is already the X server on <code>:0</code>, so a display manager such as <code>lightdm</code> is not needed and does nothing useful here: the guest kernel has no graphics device, so it never starts an X server of its own. If one got enabled, for example by <code>setup-desktop</code>, disable it with <code>rc-update del lightdm</code>.</p>
+      </div>
+
+      <h2>Single GUI apps</h2>
+      <p>You do not need a full desktop to run individual X11 applications. Install any X11 app and launch it directly; <code>DISPLAY=:0</code> is already exported:</p>
+      <pre><code><span class="p">#</span> apk add firefox
+<span class="p">$</span> firefox &amp;</code></pre>
+      <p>The app will appear in the viewer as soon as it opens a window.</p>
+
+      <h2>Complete example: Xfce from a fresh VM</h2>
+      <p>Every command in order, starting from a VM you have just booted for the first time. Run these in the Podroid terminal:</p>
+      <pre><code><span class="c"># 1. install the desktop (about 400 MB)</span>
+<span class="p">#</span> apk add xfce4 xfce4-terminal
+
+<span class="c"># 2. start it; it keeps running in the background</span>
+<span class="p">#</span> startxfce4 &amp;</code></pre>
+      <p>Now tap the monitor icon in the terminal's top bar. The desktop appears in the built-in viewer. There is nothing to configure, no VNC server to install, and no ports to forward: <code>Xvnc</code> is already running as the X server and Podroid already forwards it to the viewer.</p>
+
+      <h2>Connecting from another computer</h2>
+      <p>The built-in viewer is the intended way to use the desktop, and it needs no setup. Reaching that same desktop from a PC takes one extra step, because of a deliberate safety decision.</p>
+
+      <div class="callout warn">
+        <span class="label">Why your VNC client cannot reach port 5900 directly</span>
+        <p>The X session inside the VM runs with no password (<code>-SecurityTypes None</code>). To stop that from becoming an open desktop for everyone on your network, Podroid forwards port <code>5900</code> to <code>127.0.0.1</code> on the phone only, so nothing outside the phone can dial it. Host ports <code>5900</code> and <code>4713</code> are reserved for this reason, and adding your own forwarding rule on them is refused with "Port 5900 is reserved for the in-app desktop".</p>
+      </div>
+
+      <p>The recommended way in is an SSH tunnel, which carries the desktop over the SSH connection you already have. Enable SSH in Podroid's settings first, then run this <strong>on your computer</strong>:</p>
+      <pre><code><span class="c"># replace with the phone's address shown on the Status screen</span>
+<span class="p">$</span> ssh -p 9922 -L 5900:127.0.0.1:5900 root@&lt;phone-ip&gt;</code></pre>
+      <p>Leave that connection open, then point any VNC client at <code>localhost:5900</code>. The desktop is encrypted in transit, needs no extra forwarding rule, and works from whichever network the phone and PC share.</p>
+
+      <div class="callout note">
+        <span class="label">If the phone has several addresses</span>
+        <p>A phone on mobile data that is also sharing its connection has more than one address at once, and only one of them reaches your PC. The <strong>Status</strong> screen lists every address the phone can be reached on. Use the one on the same network as the computer you are connecting from.</p>
+      </div>
+
+      <p>If you would rather expose VNC directly instead of tunnelling, add a port forward from a host port other than 5900 (for example <code>5901</code>) to guest port <code>5900</code>, then connect to <code>phone-address:5901</code>. Be aware of what that means: the session has no password, so anyone on that network can open your desktop. Only do this on a network you trust.</p>
+
+      <h2>Connecting with RDP instead</h2>
+      <p>An SSH tunnel assumes the other computer has an SSH client. Older Windows machines often do not, while every one of them has a Remote Desktop client built in. Alpine has <code>xrdp</code> in its repositories, so the guest can speak RDP as well. Nothing needs to be installed on the Windows side.</p>
+
+      <p>This is not shipped in the VM image, and it does not replace the built-in viewer, which keeps working exactly as before. It is a few commands inside the guest.</p>
+
+      <pre><code><span class="c"># inside the VM, over SSH or the in-app terminal</span>
+<span class="p">#</span> apk add xrdp openssl
+
+<span class="c"># plus a desktop for the session to start, if you have not installed one</span>
+<span class="c"># already. openbox and xterm are the smallest pair that works.</span>
+<span class="p">#</span> apk add openbox xterm
+
+<span class="c"># xrdp needs a TLS certificate. Without one it falls back to legacy RDP</span>
+<span class="c"># security, which current Windows and FreeRDP clients refuse to complete.</span>
+<span class="p">#</span> cd /etc/xrdp
+<span class="p">#</span> openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout key.pem -out cert.pem -subj "/CN=podroid"
+<span class="p">#</span> chmod 600 key.pem
+
+<span class="c"># xrdp offers its Xorg backend first and Alpine ships no xorgxrdp, so a</span>
+<span class="c"># login would fail with "X server could not be started". Pin it to Xvnc.</span>
+<span class="p">#</span> sed -i 's/^autorun=$/autorun=Xvnc/' /etc/xrdp/xrdp.ini
+
+<span class="c"># tell the session what to start. On Alpine, xrdp runs the system xinitrc,</span>
+<span class="c"># which reads ~/.xinitrc; it never looks at ~/.xsession. Start the window</span>
+<span class="c"># manager FIRST and let it launch the terminal: a program started before</span>
+<span class="c"># openbox is up can end up permanently invisible, which reads as a black</span>
+<span class="c"># or empty desktop.</span>
+<span class="p">#</span> echo 'exec openbox-session' &gt; /root/.xinitrc
+<span class="p">#</span> mkdir -p /root/.config/openbox
+<span class="p">#</span> echo 'xterm &amp;' &gt; /root/.config/openbox/autostart
+
+<span class="c"># both services are required: xrdp speaks the protocol, sesman logs you in</span>
+<span class="p">#</span> rc-service xrdp-sesman start
+<span class="p">#</span> rc-service xrdp start
+<span class="p">#</span> rc-update add xrdp-sesman
+<span class="p">#</span> rc-update add xrdp</code></pre>
+
+      <p>Then add a port forward in <strong>Settings &rarr; Port forwards</strong> from host port <code>3389</code> to VM port <code>3389</code>, and connect from the PC to <code>phone-address:3389</code> with the guest's own credentials: user <code>root</code>, password <code>podroid</code> unless you changed it. Be patient on the first login: on the QEMU backend the session can take a minute or more to start, and until openbox is up the screen is plain black with only a mouse cursor. The dark gray desktop appearing means the session is ready; the terminal from the autostart follows, and the right-click menu works from that point on.</p>
+
+      <div class="callout note">
+        <span class="label">On an older VM image, one more line</span>
+        <p>The guest sets <code>DISPLAY</code> for you so that programs started from the terminal appear on the in-app desktop, and xrdp reads the same profile before starting your session. Older images set it unconditionally, which sends an RDP session's windows to the phone's screen and leaves the remote desktop black. Check with <code>grep DISPLAY /etc/profile.d/podroid-x11.sh</code>: if it reads <code>export DISPLAY=:0</code> rather than <code>: "${DISPLAY:=:0}"</code>, run <code>sed -i 's/^export DISPLAY=:0$/: "${DISPLAY:=:0}"; export DISPLAY/' /etc/profile.d/podroid-x11.sh</code> once.</p>
+      </div>
+
+      <div class="callout warn">
+        <span class="label">Change the root password before doing this</span>
+        <p>Port forwards bind every interface, so an RDP listener is reachable by anyone on the same network. Unlike the VNC path above, this one does ask for a password, which is worth having. It is also the guest's well-known default password, which is not. Run <code>passwd</code> in the guest first.</p>
+      </div>
+
+      <p>The session you get this way is its own desktop, separate from the one the in-app viewer shows, and it survives a disconnect: reconnecting drops you back into the same windows. That is usually what you want from a PC. If you would rather see the <em>same</em> screen as the phone, add this section to <code>/etc/xrdp/xrdp.ini</code> and set <code>autorun=podroid</code> instead of <code>autorun=Xvnc</code>, which points RDP at the running X session rather than starting a new one:</p>
+
+      <pre><code>[podroid]
+name=Podroid desktop
+lib=libvnc.so
+ip=127.0.0.1
+port=5900
+username=na
+password=na</code></pre>
+
+      <p>Two things trip people up here. First, <code>xrdp.ini</code> is read by the xrdp daemon itself, so the change is not live until you run <code>rc-service xrdp restart</code>; restarting only <code>xrdp-sesman</code> does nothing for it. Second, this mirrors whatever the phone's own session is currently showing: if the in-app desktop has nothing running, the mirror is an empty black screen. Open the in-app desktop (or start something on it) and the mirror shows the same picture.</p>
+
+      <p>That variant inherits the in-app session's lack of a password, so it hands the desktop to anyone who can reach port 3389. Use it over an SSH tunnel, or on a network you control, and prefer the authenticated login above otherwise.</p>
+
+      <h2>Viewer settings reference</h2>
+      <p>Tap the tune/gear icon in the X11 viewer's top bar to open viewer settings.</p>
+
+      <h3>Resolution</h3>
+      <p>Controls what resolution Xvnc presents to the desktop. Uses the RFB ExtendedDesktopSize extension to resize live without restarting the VM.</p>
+      <ul>
+        <li><strong>Match viewport</strong> - the desktop tracks your screen size exactly, resizing whenever the viewer resizes. Pixel-perfect on most devices.</li>
+        <li><strong>Preset</strong> - fixed resolutions: 720p, 900p, 1080p, or 1440p. Pick a lower preset for smoother rendering on heavy desktops over a high-DPI display.</li>
+        <li><strong>Custom</strong> - enter any width and height in pixels.</li>
+      </ul>
+
+      <h3>Touch input</h3>
+      <ul>
+        <li><strong>Direct</strong> - tap to click at the point you touch; drag to drag; long-press activates drag-lock. Intuitive for touch-first use.</li>
+        <li><strong>Trackpad</strong> - relative pointer: your finger position moves the cursor rather than placing it. Sensitivity is adjustable (0.5x to 3.0x) with optional pointer acceleration.</li>
+      </ul>
+      <p>In both modes: two-finger tap sends a right-click; two-finger drag scrolls.</p>
+
+      <h3>External input</h3>
+      <p>A connected hardware keyboard passes through fully, including Ctrl, Alt, Shift, and composed shortcuts (e.g. Ctrl+L in a browser). An external mouse's scroll wheel scrolls, and all three buttons map to their X11 equivalents.</p>
+
+      <h3>Other settings</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Setting</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Fullscreen</td>
+            <td>Hides the system UI. Back exits fullscreen.</td>
+          </tr>
+          <tr>
+            <td>Rotation lock</td>
+            <td>Auto, Landscape, or Portrait. Auto follows the device sensor.</td>
+          </tr>
+          <tr>
+            <td>Extra-keys bar</td>
+            <td>Show or hide the keyboard shortcut bar below the viewer.</td>
+          </tr>
+          <tr>
+            <td>Server DPI</td>
+            <td>96 to 192. Tells Xvnc what DPI to report to apps. Takes effect on the next VM start.</td>
+          </tr>
+          <tr>
+            <td>Render scale</td>
+            <td>100%, 75% or 50%. Lower is faster: the desktop is drawn at a reduced size and scaled up to fit the screen.</td>
+          </tr>
+          <tr>
+            <td>Audio</td>
+            <td>PulseAudio streams PCM from the VM to the app over port 4713. Toggle to enable or disable.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <span class="label">Known limitation: external mouse right-click</span>
+        <p>With an external mouse, right-click currently exits fullscreen instead of reaching the desktop. Android maps the mouse's right button to the Back action. Two-finger touch right-click works correctly as a workaround. A fix is planned.</p>
+      </div>
+
+      <div class="callout note">
+        <span class="label">Performance</span>
+        <p>The viewer draws on its own thread and lets the GPU do the scaling, so the desktop stays responsive while frames arrive. It uses uncompressed Raw encoding. On a high-DPI phone, selecting the 720p or 900p preset, or a lower render scale, reduces the amount of screen data handled each frame and noticeably improves smoothness on heavy desktops. See the <a href="performance.html">Performance</a> page for general tuning advice.</p>
+      </div>
+
+      <div class="pagenav">
+        <a class="prev" href="packages.html"><span class="dir">Previous</span>← Packages &amp; services</a>
+        <a class="next" href="settings.html"><span class="dir">Next</span>Terminal &amp; settings →</a>
+      </div>
+      <p class="docfoot">Podroid is free software (GPL). Docs for v1.2.9. Found something inaccurate? <a href="https://github.com/ExTV/Podroid/issues">Open an issue</a>.</p>
+    </main>
+  </div>
+
+  <script>
+    document.querySelector('.menu-toggle').addEventListener('click', function () {
+      document.querySelector('.sidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

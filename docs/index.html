@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Podroid: Linux containers on Android, no root required</title>
+  <meta name="description" content="Podroid runs Podman, Docker, and LXC on Android in a real Alpine Linux VM with a custom Linux 7.1.5 kernel - via QEMU on any ARM64 device, or hardware-accelerated AVF (pKVM) on supported Pixels - plus an in-app X11 desktop for GUI apps. No root, no custom recovery." />
+  <meta property="og:title" content="Podroid: Linux containers on Android, no root required" />
+  <meta property="og:description" content="Spin up a real Alpine Linux VM with a full Podman runtime on any Android 8+ ARM64 device. QEMU software emulation everywhere, or near-native AVF (pKVM) acceleration on supported Pixels. No root, no Magisk." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://extv.github.io/Podroid/" />
+  <meta property="og:image" content="https://extv.github.io/Podroid/logo.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Podroid" />
+  <meta name="twitter:description" content="Linux containers on Android, no root required." />
+  <meta name="twitter:image" content="https://extv.github.io/Podroid/logo.png" />
+  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── Tokyo Night palette ───────────────────────────── */
+    :root {
+      --bg:        #1a1b26;
+      --bg-dark:   #16161e;
+      --bg-card:   #1f2335;
+      --bg-card2:  #24283b;
+      --border:    #292e42;
+      --text:      #c0caf5;
+      --text-dim:  #a9b1d6;
+      --muted:     #7982b0;
+      --green:     #9ece6a;
+      --green-dim: #1e3319;
+      --blue:      #7aa2f7;
+      --cyan:      #7dcfff;
+      --yellow:    #e0af68;
+      --red:       #f7768e;
+      --purple:    #bb9af7;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { color: var(--cyan); text-decoration: underline; }
+
+    code, pre, .mono { font-family: 'DM Mono', monospace; }
+
+    /* ── NAV ───────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2rem;
+      height: 56px;
+      background: rgb(22 22 30 / 0.9);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-weight: 600;
+      font-size: 1rem;
+      color: var(--text);
+      text-decoration: none !important;
+    }
+
+    .nav-logo img {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.6rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--muted);
+      font-size: 0.875rem;
+      font-weight: 500;
+      white-space: nowrap;
+      transition: color 0.15s;
+    }
+
+    .nav-links a:hover { color: var(--text-dim); text-decoration: none; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 1.1rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      text-decoration: none !important;
+      font-family: 'DM Sans', sans-serif;
+    }
+
+    .btn:hover { opacity: 0.85; transform: translateY(-1px); text-decoration: none; }
+    .btn-primary { background: var(--green); color: var(--bg-dark); }
+    .btn-ghost   { border: 1px solid var(--border); color: var(--text-dim); background: transparent; }
+    .btn-ghost:hover { border-color: var(--muted); color: var(--text); }
+
+    /* ── HERO ──────────────────────────────────────────── */
+    #hero {
+      padding: 7rem 2rem 5.5rem;
+      text-align: center;
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: clamp(2.4rem, 5vw, 3.6rem);
+      font-weight: 600;
+      line-height: 1.2;
+      letter-spacing: -0.03em;
+      text-wrap: balance;
+      margin-bottom: 1.8rem;
+      color: var(--text);
+    }
+
+    h1 em {
+      font-style: normal;
+      color: var(--green);
+    }
+
+    .hero-sub {
+      font-size: 1.05rem;
+      color: var(--text-dim);
+      max-width: 100%;
+      margin: 0 auto 2.5rem;
+      text-wrap: pretty;
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+    }
+
+    .hero-meta {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      letter-spacing: 0.03em;
+    }
+
+    /* ── SECTIONS ──────────────────────────────────────── */
+    section { padding: 5rem 2rem; }
+
+    .container { max-width: 1000px; margin: 0 auto; }
+
+    .section-label {
+      font-size: 0.72rem;
+      font-family: 'DM Mono', monospace;
+      color: var(--purple);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 0.6rem;
+    }
+
+    h2 {
+      font-size: clamp(1.6rem, 3vw, 2.2rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.55rem;
+      color: var(--text);
+    }
+
+    .section-sub {
+      color: var(--text-dim);
+      max-width: 560px;
+      font-size: 0.975rem;
+      text-wrap: pretty;
+      margin-bottom: 2.8rem;
+      line-height: 1.65;
+    }
+
+    /* ── FEATURES ──────────────────────────────────────── */
+    #features { background: var(--bg-card); }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      padding: 1.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      transition: background 0.15s;
+    }
+
+    .feature-card:hover { background: var(--bg-card2); }
+
+    .feature-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--green-dim);
+      border: 1px solid rgba(158, 206, 106, 0.15);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 0.3rem;
+      color: var(--green);
+    }
+
+    .feature-card h3 {
+      font-size: 0.925rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .feature-card p {
+      font-size: 0.858rem;
+      color: var(--text-dim);
+      line-height: 1.65;
+    }
+
+    /* Blank cells that complete the last grid row so trailing cells don't
+       show the container's border colour. Card-coloured, non-interactive. */
+    .feature-card.filler { pointer-events: none; }
+
+    /* 13 cards: 3-col leaves 2 trailing cells, 2-col leaves 1, 1-col leaves 0.
+       Show both fillers at 3-col, one at 2-col, none at 1-col. */
+    @media (max-width: 900px) {
+      .features-grid { grid-template-columns: repeat(2, 1fr); }
+      .feature-card.filler-b { display: none; }
+    }
+    @media (max-width: 600px) {
+      .features-grid { grid-template-columns: 1fr; }
+      .feature-card.filler { display: none; }
+    }
+
+    /* ── COMPARISON ────────────────────────────────────── */
+    #comparison { background: var(--bg); }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    thead { background: var(--bg-dark); }
+
+    th {
+      padding: 1rem 1.2rem;
+      text-align: left;
+      font-weight: 600;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+    }
+
+    th:not(:first-child) { text-align: center; }
+    th.col-podroid { color: var(--green); }
+
+    td {
+      padding: 0.85rem 1.2rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      vertical-align: middle;
+    }
+
+    tbody tr:hover td { background: rgb(36 40 59 / 0.5); }
+    tr:last-child td  { border-bottom: none; }
+    td:not(:first-child) { text-align: center; }
+
+    td.row-label { color: var(--text); font-weight: 500; }
+    td.col-podroid { background: rgb(28 39 20 / 0.6); }
+
+    .check   { color: var(--green); font-size: 0.9rem; font-weight: 600; }
+    .cross   { color: var(--muted); font-size: 0.9rem; }
+    .partial { color: var(--yellow); font-size: 0.78rem; font-family: 'DM Mono', monospace; }
+
+    .col-header-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.2rem;
+    }
+
+    .col-badge {
+      font-size: 0.65rem;
+      font-weight: 400;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+    }
+
+    /* ── HOW IT WORKS ──────────────────────────────────── */
+    #how { background: var(--bg-card); }
+
+    .arch-diagram {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.8rem 2rem;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.78rem;
+      line-height: 1.9;
+      color: var(--muted);
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .arch-green { color: var(--green); }
+    .arch-blue  { color: var(--blue); }
+    .arch-white { color: var(--text-dim); }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-top: 2.5rem;
+    }
+
+    .step {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.2rem;
+      display: flex;
+      gap: 0.8rem;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--green-dim);
+      border: 1px solid rgba(158, 206, 106, 0.2);
+      color: var(--green);
+      font-size: 0.7rem;
+      font-family: 'DM Mono', monospace;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .step-body h4 {
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      color: var(--text);
+    }
+
+    .step-body p {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      line-height: 1.55;
+    }
+
+    .step-body code {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.78em;
+      background: var(--bg-card2);
+      color: var(--cyan);
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+
+    /* ── QUICK START ───────────────────────────────────── */
+    #quickstart { background: var(--bg); }
+
+    .qs-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2.5rem;
+      align-items: start;
+    }
+
+    @media (max-width: 640px) {
+      .qs-grid { grid-template-columns: 1fr; }
+    }
+
+    .qs-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .qs-step {
+      display: flex;
+      gap: 0.85rem;
+      align-items: flex-start;
+    }
+
+    .qs-step-num {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--green);
+      color: var(--bg-dark);
+      font-size: 0.7rem;
+      font-family: 'DM Mono', monospace;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 3px;
+    }
+
+    .qs-step p { font-size: 0.9rem; color: var(--text-dim); line-height: 1.55; }
+    .qs-step strong { color: var(--text); font-weight: 600; }
+    .qs-step a { color: var(--blue); }
+
+    .code-block {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.3rem 1.5rem;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.8rem;
+      line-height: 2;
+      color: var(--muted);
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .c-prompt  { color: var(--green); user-select: none; }
+    .c-comment { color: var(--muted); }
+    .c-cmd     { color: var(--text-dim); }
+
+    /* ── FAQ ───────────────────────────────────────────── */
+    #faq { background: var(--bg-card); }
+
+    .faq-list {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    details {
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-card);
+      transition: background 0.15s;
+    }
+
+    details[open] { background: var(--bg-card2); }
+    details:last-child { border-bottom: none; }
+
+    summary {
+      padding: 1.1rem 1.5rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text);
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      transition: color 0.15s;
+    }
+
+    summary::-webkit-details-marker { display: none; }
+    summary:hover { color: var(--blue); }
+
+    summary::after {
+      content: '+';
+      font-size: 1.3rem;
+      font-weight: 300;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    details[open] summary::after { content: '−'; color: var(--blue); }
+
+    .faq-answer {
+      padding: 0 1.5rem 1.2rem;
+      font-size: 0.875rem;
+      color: var(--text-dim);
+      line-height: 1.75;
+    }
+
+    .faq-answer code {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      padding: 0.1em 0.4em;
+      border-radius: 4px;
+      font-size: 0.82em;
+      color: var(--cyan);
+    }
+
+    /* ── FOOTER ────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2rem;
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+    }
+
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text-dim); text-decoration: none; }
+
+    /* ── RESPONSIVE ────────────────────────────────────── */
+    @media (max-width: 600px) {
+      nav .nav-links { display: none; }
+      .arch-diagram  { font-size: 0.62rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="https://github.com/ExTV/Podroid" class="nav-logo">
+    <img src="logo.png" alt="Podroid" />
+    Podroid
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#comparison">Compare</a></li>
+    <li><a href="#how">How it works</a></li>
+    <li><a href="#quickstart">Quick start</a></li>
+    <li><a href="#faq">FAQ</a></li>
+    <li><a href="guide/">Docs</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <h1>Linux containers on Android.<br /><em>No root required.</em></h1>
+  <p class="hero-sub">
+    Podroid spins up a real Alpine Linux VM using QEMU and a custom&nbsp;kernel.<br />
+    Run <strong>Podman</strong>, <strong>Docker</strong>, and <strong>LXC</strong> with a polished built-in terminal,<br />
+    or open the in-app <strong>X11 viewer</strong> for GUI apps. Install the APK, tap Start, go.
+  </p>
+  <div class="hero-actions">
+    <a href="https://github.com/ExTV/Podroid/releases" class="btn btn-primary">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download APK
+    </a>
+    <a href="guide/" class="btn btn-ghost">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      Read the docs
+    </a>
+    <a href="https://github.com/ExTV/Podroid" class="btn btn-ghost">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+      View on GitHub
+    </a>
+  </div>
+  <p class="hero-meta">ARM64 · Android 8+ · No root · GPLv2</p>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="container">
+    <p class="section-label">Features</p>
+    <h2>Everything a dev environment should have</h2>
+    <p class="section-sub">Built from the kernel up for containers, not just shell access.</p>
+
+    <div class="features-grid">
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
+        </div>
+        <h3>Podman, Docker, LXC</h3>
+        <p>All three major container engines work zero-config. Native kernel <code>overlay2</code> for Docker, <code>fuse-overlayfs</code> for rootless Podman, and a pre-configured <code>lxcbr0</code> bridge for LXC. Pull any OCI image and run it.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+        </div>
+        <h3>Custom Linux 7.1.5 Kernel</h3>
+        <p>Compiled from scratch with netfilter, bridge, overlayfs, veth, IPVS, VXLAN, IPsec, cgroup v2, and binfmt_misc all built-in. Docker's <code>check-config.sh</code> reports zero fixable complaints.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
+        </div>
+        <h3>Real Terminal</h3>
+        <p>Termux TerminalView with xterm-256color, proper PTY, full mouse support, 122 color themes, 13 fonts (plus your own <code>.ttf</code> via the system file picker), and an extra-keys bar with F1–F12, ESC, CTRL, ALT.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        </div>
+        <h3>Port Forwarding</h3>
+        <p>Expose any VM port to your Android device at runtime. Run a web server, database, or API and hit it from your phone's browser — from Settings, or with <code>podroid-forward</code> right inside the VM.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.63 3.42 2 2 0 0 1 3.6 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.84a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        </div>
+        <h3>Built-in SSH</h3>
+        <p>Dropbear SSH server, toggled on in the setup wizard or Settings, reachable on host port 9922. Connect from your laptop, VS Code Remote, or any SSH client on the same network.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </div>
+        <h3>Notify from the VM</h3>
+        <p>Run <code>podroid-notify "build done"</code> inside the guest and it pops an Android notification — with a title, priority, and an <code>--id</code> to update one in place. Perfect for long builds, downloads, and cron jobs. Works on both backends.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <h3>Persistent &amp; Fast</h3>
+        <p>Overlayfs over a persistent ext4 image. Containers, packages, and configs survive reboots. ZRAM lz4 swap at 1.5× RAM adds headroom against the OOM killer. Boots in 6–30 seconds.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <h3>In-app X11 Desktop</h3>
+        <p>Tap the monitor icon in the terminal and an in-app viewer opens, talking RFB to <code>Xvnc</code> inside the VM. Touch becomes mouse, soft-keyboard becomes keyboard, and PCM audio streams from PulseAudio. Run <code>firefox</code>, <code>xterm</code>, anything from Alpine.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="3" r="1.4"/><path d="M12 4.4V21"/><path d="M8.5 10.5 12 7l3.5 3.5"/><rect x="9" y="11" width="6" height="4.5" rx="1"/><path d="M7 16.5h10"/></svg>
+        </div>
+        <h3>USB device passthrough</h3>
+        <p>Plug a real USB device (Wi-Fi adapter, storage, serial adapter, audio interface) into the running VM straight from Android, with no root and no device-filter XML. Flip the opt-in toggle in Settings, attach the device, grant permission once, and it shows up inside the guest. QEMU backend.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <h3>One-tap Diagnostics</h3>
+        <p><strong>Settings → Export Diagnostic Log</strong> bundles app info, settings, VM state, app logcat, and the full QEMU console into a single <code>log.txt</code> and shares it via the system share sheet. No ADB needed to file a useful bug report.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h3>Tuned for Software Emulation</h3>
+        <p>KVM needs root, so we leaned hard on TCG instead. Multi-thread TCG with a 512 MB translation cache, a dedicated I/O thread for the rootfs disk, ZRAM lz4 swap at 1.5× RAM, and <code>mitigations=off</code> in the guest combine for a 5–15% CPU win. Native 16 KB page alignment, so Pixel 8/9/10 are first-class.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+        </div>
+        <h3>Hardware acceleration (AVF)</h3>
+        <p>On a Pixel that ships pKVM, switch the backend to the Android Virtualization Framework and the same Alpine guest runs on real CPU cores - no TCG, near-native speed. Two one-time <code>adb</code> grants, then it's automatic. Falls back to QEMU everywhere else. <a href="guide/backends.html">Backends guide</a>.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        </div>
+        <h3>English &amp; 中文</h3>
+        <p>Fully localized interface in English and Chinese, switchable in Settings or following your device language.</p>
+      </div>
+
+      <div class="feature-card filler filler-a" aria-hidden="true"></div>
+      <div class="feature-card filler filler-b" aria-hidden="true"></div>
+
+    </div>
+  </div>
+</section>
+
+<!-- COMPARISON -->
+<section id="comparison">
+  <div class="container">
+    <p class="section-label">Comparison</p>
+    <h2>How Podroid stacks up</h2>
+    <p class="section-sub">Termux gives you a Linux shell. Google Terminal gives you a VM with optional manual container setup. Podroid ships three container engines out of the box.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:34%">Capability</th>
+            <th class="col-podroid">
+              <div class="col-header-wrap">
+                Podroid
+                <span class="col-badge">this project</span>
+              </div>
+            </th>
+            <th>
+              <div class="col-header-wrap">
+                Termux
+                <span class="col-badge">v0.118+</span>
+              </div>
+            </th>
+            <th>
+              <div class="col-header-wrap">
+                Google Terminal
+                <span class="col-badge">AVF</span>
+              </div>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-label">Root required</td>
+            <td class="col-podroid"><span class="check">✓ No</span></td>
+            <td><span class="check">✓ No</span></td>
+            <td><span class="check">✓ No</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">Real container runtime</td>
+            <td class="col-podroid"><span class="check">✓ Podman + Docker + LXC</span></td>
+            <td><span class="cross">✗</span></td>
+            <td><span class="partial">manual setup</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">VM isolation</td>
+            <td class="col-podroid"><span class="check">✓ QEMU + AVF</span></td>
+            <td><span class="cross">✗ shared kernel</span></td>
+            <td><span class="check">✓ AVF</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">Docker Hub images</td>
+            <td class="col-podroid"><span class="check">✓</span></td>
+            <td><span class="cross">✗</span></td>
+            <td><span class="partial">manual setup</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">Custom kernel</td>
+            <td class="col-podroid"><span class="check">✓ Linux 7.1.5</span></td>
+            <td><span class="cross">✗ host kernel</span></td>
+            <td><span class="check">✓</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">Works on any ARM64</td>
+            <td class="col-podroid"><span class="check">✓ Android 8+</span></td>
+            <td><span class="check">✓</span></td>
+            <td><span class="cross">✗ Pixel only</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">Port forwarding</td>
+            <td class="col-podroid"><span class="check">✓ via QMP</span></td>
+            <td><span class="partial">via socat</span></td>
+            <td><span class="cross">✗</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">Downloads folder sharing</td>
+            <td class="col-podroid"><span class="check">✓ virtio-9p (QEMU) + vsock (AVF)</span></td>
+            <td><span class="check">✓</span></td>
+            <td><span class="cross">✗</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">SSH server</td>
+            <td class="col-podroid"><span class="check">✓ Dropbear</span></td>
+            <td><span class="partial">via pkg</span></td>
+            <td><span class="partial">manual setup</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">xterm-256color + mouse</td>
+            <td class="col-podroid"><span class="check">✓</span></td>
+            <td><span class="check">✓</span></td>
+            <td><span class="partial">basic</span></td>
+          </tr>
+          <tr>
+            <td class="row-label">Configurable RAM / CPUs</td>
+            <td class="col-podroid"><span class="check">✓ 512 MB–16 GB, 1–8 cores</span></td>
+            <td><span class="cross">✗</span></td>
+            <td><span class="partial">limited</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how">
+  <div class="container">
+    <p class="section-label">Architecture</p>
+    <h2>How it works</h2>
+    <p class="section-sub">Five sockets, one VM, zero root. Here's what happens when you tap Start.</p>
+
+    <div class="arch-diagram"><span class="arch-white">┌────────────────────── Android App (Compose) ─────────────────────────┐
+│                                                                      │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐    │
+│  │  PodroidService  │  │   QEMU 11 TCG    │  │   Terminal UI    │    │
+│  │  (ForegroundSvc) │  │   ARM64-native   │  │   Termux View    │    │
+│  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘    │
+└───────────┼─────────────────────┼─────────────────────┼──────────────┘
+            │                     │                     │
+            │   ┌─────────────────▼────────────────┐    │
+            │   │      Alpine Linux 3.24 VM        │    │
+            │   │   /sbin/init (busybox)           │    │
+            │   │   OpenRC (PID 1)                 │    │
+            │   │  ┌──────────┐  ┌──────────────┐  │    │
+            │   │  │ Podman + │  │ Linux 7.1.5  │  │    │
+            └──►│  │  Docker  │  │   (custom)   │  │◄───┘
+   boot stages  │  │ + LXC    │  └──────────────┘  │  libpodroid-bridge.so
+                │  └──────────┘                    │  PTY ↔ virtio-console
+                │                                  │
+                │  /dev/vda  ext4 overlay (rw)     │
+                │  /dev/vdb  squashfs base (ro)    │
+                └──────────────────────────────────┘</span>
+
+<span class="arch-green">terminal.sock</span> ↔ hvc0     →  primary shell I/O
+<span class="arch-blue">ctrl.sock    </span> ↔ hvc1     →  debounced SIGWINCH resize signals
+<span class="arch-white">serial.sock  </span> ↔ ttyAMA0  →  boot log stream → boot stage detection
+<span class="arch-green">host.sock    </span> ↔ hvc2     →  guest → Android bridge (notify / port forwards)
+qmp.sock               →  runtime port-forward control</div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>QEMU loads the kernel</h4>
+          <p>Custom Linux 7.1.5 + a tiny initramfs and an Alpine squashfs are extracted from APK assets on first launch.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4>Overlay + switch_root</h4>
+          <p>Init mounts the squashfs as the read-only base, the ext4 image as the writable upper, then <code>switch_root</code>s into <code>/sbin/init</code>.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h4>OpenRC services start</h4>
+          <p>Cgroup v2, network, Docker bind-mount, <code>lxcbr0</code> bridge, MASQUERADE NAT, sysctls, and Dropbear SSH all come up automatically.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h4>Bridge connects</h4>
+          <p><code>libpodroid-bridge.so</code> relays your PTY to the VM's virtio-console. Shell is ready.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- QUICK START -->
+<section id="quickstart">
+  <div class="container">
+    <p class="section-label">Quick start</p>
+    <h2>Running in under a minute</h2>
+    <p class="section-sub">No configuration needed. Download, install, go.</p>
+
+    <div class="qs-grid">
+      <div class="qs-steps">
+        <div class="qs-step">
+          <div class="qs-step-num">1</div>
+          <p><strong>Download</strong> the latest APK from the <a href="https://github.com/ExTV/Podroid/releases">Releases page</a>.</p>
+        </div>
+        <div class="qs-step">
+          <div class="qs-step-num">2</div>
+          <p><strong>Install</strong> it on your Android device (ARM64, Android 8+).</p>
+        </div>
+        <div class="qs-step">
+          <div class="qs-step-num">3</div>
+          <p><strong>Tap Start VM.</strong> Watch the boot progress; typically ready in 6–30 seconds.</p>
+        </div>
+        <div class="qs-step">
+          <div class="qs-step-num">4</div>
+          <p><strong>Tap Open Terminal</strong> to access the Alpine shell.</p>
+        </div>
+        <div class="qs-step">
+          <div class="qs-step-num">5</div>
+          <p><strong>Run containers.</strong> Any image from Docker Hub works out of the box.</p>
+        </div>
+      </div>
+
+      <div class="code-block"><span class="c-comment"># Podman: rootless, works out of the box</span>
+<span class="c-prompt"># </span><span class="c-cmd">podman run --rm alpine echo hi</span>
+
+<span class="c-comment"># Docker: pre-installed, auto-started</span>
+<span class="c-prompt"># </span><span class="c-cmd">docker run -d -p 8080:80 nginx</span>
+
+<span class="c-comment"># LXC: pre-installed, bridge ready</span>
+<span class="c-prompt"># </span><span class="c-cmd">lxc-create -t alpine -n test</span>
+<span class="c-prompt"># </span><span class="c-cmd">lxc-start -n test</span>
+
+<span class="c-comment"># GUI apps: tap the monitor icon</span>
+<span class="c-prompt"># </span><span class="c-cmd">apk add firefox &amp;&amp; firefox &amp;</span>
+
+<span class="c-comment"># SSH (enable in Settings)</span>
+<span class="c-prompt">$ </span><span class="c-cmd">ssh root@&lt;phone-ip&gt; -p 9922</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq">
+  <div class="container">
+    <p class="section-label">FAQ</p>
+    <h2>Common questions</h2>
+    <p class="section-sub">For the full picture, read the <a href="guide/">documentation</a>. If something still isn't covered, open an issue on GitHub.</p>
+
+    <div class="faq-list">
+
+      <details>
+        <summary>Does this require root or a modified Android?</summary>
+        <div class="faq-answer">
+          No. Podroid runs entirely in userspace using QEMU's TCG (software emulation). No root, no custom recovery, no Magisk. Any stock Android 8+ ARM64 device works.
+        </div>
+      </details>
+
+      <details>
+        <summary>Why not just use Termux + proot?</summary>
+        <div class="faq-answer">
+          Termux is great for a Linux shell, but it runs on Android's host kernel. That kernel doesn't have the namespaces, cgroups, or netfilter rules needed for real containers. <code>proot</code> is a chroot emulation; containers built for Docker, Podman, or LXC won't work reliably. Podroid runs a real VM with its own custom kernel, so every OCI image from Docker Hub just works.
+        </div>
+      </details>
+
+      <details>
+        <summary>How is this different from Google Terminal / AVF?</summary>
+        <div class="faq-answer">
+          Google's Terminal app uses Android Virtualization Framework (AVF), a system-level hypervisor available only on recent Pixel devices. It gives you a Debian VM but no container runtime and limited configurability. Podroid runs on <em>any</em> ARM64 Android 8+ device via QEMU TCG (software emulation), and on a Pixel that ships pKVM it can use AVF too for near-native speed - the same Alpine guest either way. It ships with three container engines, port forwarding, SSH, an in-app X11 desktop, and a configurable terminal.
+        </div>
+      </details>
+
+      <details>
+        <summary>Is performance usable? QEMU is slow.</summary>
+        <div class="faq-answer">
+          TCG is software emulation, so compute-heavy workloads are slower than native. Podroid ships several optimizations: a 256–512 MB translation cache, a dedicated I/O thread for virtio-blk (big win for image pulls), ZRAM lz4 swap at 1.5× RAM, and <code>mitigations=off</code> in the guest kernel for a 5–15% CPU gain. For typical dev tasks like running a web server, a database, or CLI tools, it's very usable. On a Pixel that ships pKVM you can switch to the <a href="guide/backends.html">AVF backend</a> for near-native CPU speed.
+        </div>
+      </details>
+
+      <details>
+        <summary>Can Podroid use hardware acceleration instead of emulation?</summary>
+        <div class="faq-answer">
+          Yes, on devices that ship pKVM (Pixel 8 and later, and any other device whose maker enables it). Set the backend to AVF in Settings and Podroid runs the guest on real CPU cores through the Android Virtualization Framework - no TCG translation, near-native speed. It needs two one-time <code>adb</code> permission grants (or Shizuku, no PC required); after that, Auto mode picks AVF when available and falls back to QEMU everywhere else. Still no root. See the <a href="guide/backends.html">Backends guide</a> for setup.
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I do things on Android from inside the VM?</summary>
+        <div class="faq-answer">
+          Yes. Two CLIs ship in the guest: <code>podroid-notify "build done"</code> pops an Android notification (with a title, priority, and an <code>--id</code> to update one in place), and <code>podroid-forward 8888 80</code> adds a port-forward rule without opening Settings. Both work on either backend and are handy for long builds, downloads, and cron jobs. See <a href="guide/networking.html">Networking &amp; ports</a>.
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I run GUI apps like Firefox?</summary>
+        <div class="faq-answer">
+          Yes. Tap the monitor icon in the terminal's top bar to open the in-app X11 viewer. It speaks RFB 3.8 to <code>Xvnc</code> running inside the VM and streams audio from PulseAudio. Then just <code>apk add firefox</code> (or anything else from the Alpine repos) and launch it from the shell. Touch becomes mouse, the soft-keyboard becomes keyboard, and the picture letterboxes to your phone's aspect ratio.
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I access my Android files from the VM?</summary>
+        <div class="faq-answer">
+          Yes. Toggle <strong>Downloads folder sharing</strong> in Settings and the Android Downloads folder is exposed to the VM on both backends - via <code>virtio-9p</code> on QEMU, and via an in-process 9p2000.L server over vsock on AVF - mounted inside the guest at <code>/mnt/downloads</code>. It's bidirectional: files you drop in Downloads on the phone show up there immediately, and anything the VM writes to <code>/mnt/downloads</code> appears back in Downloads.
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I plug in a USB device?</summary>
+        <div class="faq-answer">
+          Yes, on the QEMU backend. Enable <strong>USB passthrough</strong> in Settings (it adds a USB controller at boot, so set it while the VM is stopped), then attach a device through a USB-C hub or OTG adapter. Android asks for permission once per device, and it then appears inside the guest while Podroid is running. Wi-Fi adapters need firmware installed inside the guest before they will associate, because the guest image ships none. Install the package for your chipset, for example <code>apk add linux-firmware-rtw88</code> for RTL8821AU/8812AU/8814AU dongles or <code>apk add linux-firmware-rtlwifi</code> for RTL8188/8192 ones, then replug the adapter. Works with Wi-Fi adapters, storage, serial adapters, audio interfaces, and more. Not available on the AVF backend, which has no channel to hand the device to the VM.
+        </div>
+      </details>
+
+      <details>
+        <summary>How much storage does it use?</summary>
+        <div class="faq-answer">
+          The APK is ~200 MB (QEMU + kernel + initramfs + Alpine squashfs + fonts). On first launch you choose a VM disk size between 2 GB and 512 GB; this is a sparse <code>storage.img</code> that only grows as you pull images and install packages.
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I connect from my laptop over SSH?</summary>
+        <div class="faq-answer">
+          Yes. Turn SSH on in the setup wizard or later in Settings, and Dropbear is reachable on host port 9922 (it forwards to the guest's port 22; an unprivileged Android app can't bind ports below 1024, which is why it's 9922 and not 22). As long as your laptop and phone are on the same network, <code>ssh root@&lt;phone-ip&gt; -p 9922</code> gives you a remote shell. Useful for VS Code Remote or any SSH client.
+        </div>
+      </details>
+
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>
+    Podroid · <a href="https://github.com/ExTV/Podroid">github.com/ExTV/Podroid</a> · GPLv2 ·
+    Built on <a href="https://www.qemu.org">QEMU</a>, <a href="https://podman.io">Podman</a>, <a href="https://alpinelinux.org">Alpine</a>, <a href="https://github.com/termux/termux-app">Termux</a>
+  </p>
+</footer>
+
+</body>
+</html>

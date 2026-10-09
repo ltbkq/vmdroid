@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Podroid - Rootless Podman for Android
+  Copyright (C) 2024-2026 Podroid contributors
+
+  A headless AArch64 QEMU micro-VM running Alpine Linux with Podman,
+  exposed via ttyd web terminal.
+
+  This program is free software; you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation; either version 2 of the License, or
+  (at your option) any later version.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Network (SLIRP user networking, ttyd web terminal, QMP socket) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Keep CPU awake while VM is running -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Terminal bell haptic feedback (used by Termux terminal view) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Foreground service for QEMU process -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Autostart the VM on boot when the setting is enabled (#78) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Required on Android 13+ to show the foreground service notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Lets the setup wizard and Home permissions card show the direct battery
+         exemption dialog instead of the general system list -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Full storage access to share the Downloads folder with the VM -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!-- Storage access for persistent container storage -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
+    <!-- Large heap for QEMU memory allocation -->
+    <uses-feature android:name="android.hardware.opengles.aep" android:required="false" />
+
+    <!--
+        USB host mode — needed to pass external USB devices into the VM. Per-device
+        access is granted at runtime via the system consent dialog; there is no
+        manifest <receiver>/device_filter.xml, the attach broadcast is handled by a
+        receiver registered in code only while the VM runs. required="false" so the
+        APK still installs on devices without USB host support.
+    -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
+    <!--
+        Android Virtualization Framework (AVF / pKVM) opt-in. Both permissions
+        are signature|*|development and can be granted to a side-loaded APK via
+        `adb shell pm grant io.github.ltbkq.vmdroid <name>` on pKVM-capable devices
+        (Pixel 8/9/10 etc.). required="false" so the APK still installs on
+        devices without AVF — runtime code falls back to QEMU/TCG.
+    -->
+    <uses-feature
+        android:name="android.software.virtualization_framework"
+        android:required="false" />
+    <uses-permission android:name="android.permission.MANAGE_VIRTUAL_MACHINE" />
+    <uses-permission android:name="android.permission.USE_CUSTOM_VIRTUAL_MACHINE" />
+
+    <application
+        android:name=".VmdroidApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:extractNativeLibs="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:largeHeap="true"
+        android:usesCleartextTraffic="true"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Vmdroid">
+
+        <!-- Main activity — single-activity Compose app -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.Vmdroid"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Foreground-launch path for automation (#78 fix round): an
+                 Activity launch is always allowed to start a foreground
+                 service, unlike a cold background receiver.
+                 START_VM 与 STOP_VM 必须对称（FIXLIST ISSUE-12）：只挂 START 会让
+                 `am start -a ...STOP_VM` 落到 onNewIntent 后被静默吞掉。 -->
+            <intent-filter>
+                <action android:name="io.github.ltbkq.vmdroid.action.START_VM" />
+                <action android:name="io.github.ltbkq.vmdroid.action.STOP_VM" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- FileProvider for sharing console logs -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
+            adb-only control surface for on-device test automation (state,
+            backend switch, port forwards, backups, navigate). The manifest
+            permission is defense in depth only - ControlProvider.call()
+            enforces the real check (shell/root uid or DUMP) in code, since
+            the framework performs no permission check on call() itself.
+        -->
+        <provider
+            android:name=".engine.control.ControlProvider"
+            android:authorities="${applicationId}.control"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+
+        <!-- Foreground service that hosts the QEMU process -->
+        <service
+            android:name=".service.VmdroidService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Podman emulation via QEMU" />
+        </service>
+
+        <!--
+            Boot autostart + Tasker/automation entry point (#78). Exported
+            without a permission on purpose: automation apps (Tasker etc.)
+            cannot hold a custom signature permission, and the two custom
+            actions only start/stop the VM via VmdroidService's own
+            companion - there is nothing privileged for a permission to gate.
+        -->
+        <receiver
+            android:name=".service.VmControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="io.github.ltbkq.vmdroid.action.START_VM" />
+                <action android:name="io.github.ltbkq.vmdroid.action.STOP_VM" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

@@ -1,0 +1,427 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Podroid - Rootless Podman for Android
+  Copyright (C) 2024-2026 Podroid contributors
+-->
+<resources>
+    <string name="app_name">VMDroid</string>
+
+    <!-- VM Status -->
+    <string name="vm_status">VM Status</string>
+    <string name="status_starting">Starting</string>
+    <string name="status_running">Running</string>
+    <string name="status_stopped">Stopped</string>
+    <!-- FIXLIST ISSUE-04：120s 没等到契约标记但仍有 console 输出时，状态是
+         Running + bootStage=Timeout —— 必须在状态卡上显式提示，不能让用户
+         误以为已经就绪。 -->
+    <string name="status_boot_timeout">Boot timeout — readiness not confirmed (stage: %1$s); the guest may still be starting</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_stopping">Shutting down…</string>
+    <string name="stopping_vm">Stopping the VM…</string>
+    <string name="stopping_action">Stopping…</string>
+
+    <!-- Network -->
+    <string name="network">Network</string>
+    <string name="phone_ip">Phone IP</string>
+    <string name="phone_ip_also">Also on %1$s</string>
+    <string name="ssh">SSH</string>
+    <string name="port_forwards">Port forwards</string>
+
+    <!-- Last Session -->
+    <string name="last_session">Last session</string>
+    <string name="booted_in">Booted in</string>
+    <string name="build">Build</string>
+
+    <!-- Actions -->
+    <string name="settings">Settings</string>
+    <string name="open_terminal">Open Terminal</string>
+    <string name="restart">Restart</string>
+    <string name="stop">Stop</string>
+    <string name="start_vm">Start VM</string>
+    <string name="download">Download</string>
+    <string name="later">Later</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="back">Back</string>
+    <string name="continue_label">Continue</string>
+    <string name="get_started">Get Started</string>
+    <string name="not_now">Not now</string>
+
+    <!-- Storage -->
+    <string name="persistent_storage">Persistent Storage</string>
+    <string name="storage_description">Storage for installed packages, container images, and your files. You can increase it later in Settings, but it cannot be shrunk.</string>
+
+    <!-- VM Config -->
+    <string name="configure_vm">Configure your VM</string>
+    <string name="vm_config_description">Defaults tuned for performance and battery. Change anytime in Settings.</string>
+    <string name="resources">Resources</string>
+    <string name="cpu_cores">CPU cores</string>
+    <string name="cpu_cores_hint">More is not always faster: on the QEMU (TCG) backend 8 cores measured slower than 4. AVF scales normally.</string>
+    <string name="storage_grow_hint">Storage can be increased later but never shrunk. A larger size takes effect on the next VM start.</string>
+    <string name="ram_label">RAM</string>
+    <string name="network_label">Network</string>
+    <string name="ssh_access">SSH access</string>
+    <string name="ssh_password_hint">ssh ltbkq@localhost -p 9922   (password: 123)</string>
+    <string name="load_balance">Load balance</string>
+    <string name="load_balance_description">Automatically tune CPU, RAM, storage, and bandwidth for this device.</string>
+    <string name="load_balance_storage_hint">Storage size is set automatically. Turn off load balance on the next step to pick manually.</string>
+    <string name="bandwidth_limit">Bandwidth limit</string>
+    <string name="bandwidth_unlimited">Unlimited</string>
+
+    <!-- Storage Access -->
+    <string name="downloads_sharing">Downloads Sharing</string>
+    <string name="storage_access_description">Optional. Mount your Android Downloads folder into the VM over virtio-9p.</string>
+    <string name="enable_downloads_sharing">Enable Downloads sharing</string>
+    <string name="grant_storage_access">Grant storage access</string>
+    <string name="requires_android_11">On this device, sharing needs the storage permission granted below (Android 11+ uses all-files access instead).</string>
+    <string name="storage_access_warning">Warning: on some devices this can crash the VM. Disable it if start fails.</string>
+
+    <!-- Settings Sections -->
+    <string name="appearance">Appearance</string>
+    <string name="dark_theme">Dark theme</string>
+    <string name="dynamic_color">Dynamic color (Material You)</string>
+    <string name="vm_resources">VM Resources</string>
+    <string name="stop_vm_to_change">Stop the VM to change these settings.</string>
+    <string name="storage">Storage</string>
+    <string name="autostart_on_boot">Start VM on boot</string>
+    <string name="autostart_on_boot_desc">Boot the VM automatically after the phone starts. Automation apps can also trigger it with the intent actions io.github.ltbkq.vmdroid.action.START_VM and STOP_VM.</string>
+    <string name="reset_vm">Reset VM (deletes all data)</string>
+    <string name="reset_vm_description">Full App Reset?</string>
+    <string name="reset_vm_text">This will clear ALL application data, including your VM storage, settings, and port rules. The app will close and return to a freshly-installed state.</string>
+    <string name="reset_everything">Reset Everything</string>
+    <string name="cancel">Cancel</string>
+    <string name="advanced">Advanced</string>
+    <string name="hide_advanced">Hide advanced</string>
+    <string name="show_advanced">Show advanced</string>
+    <string name="backend">Backend</string>
+    <string name="auto">Auto</string>
+    <string name="avf_kvm">AVF (KVM)</string>
+    <string name="qemu_tcg">QEMU (TCG)</string>
+    <string name="extra_qemu_args">Extra QEMU args</string>
+    <string name="extra_kernel_cmdline">Extra kernel cmdline</string>
+    <string name="kernel_cmdline_helper">Appended after console=ttyAMA0 — controls scheduler, mitigations, log level, etc.</string>
+    <string name="qemu_args_helper">-cpu, -accel, -object, -device, -overcommit, etc. Whitespace-separated.</string>
+    <string name="reset_field_confirm_title">Reset %1$s?</string>
+    <string name="reset_field_confirm_body">This clears your customization and restores the default value.</string>
+    <string name="about">About</string>
+    <string name="architecture">Architecture</string>
+    <string name="linux_distro">Linux distro</string>
+    <string name="documentation">Documentation</string>
+    <string name="export_diagnostic_log">Export diagnostic log</string>
+    <string name="avf_diagnostic">AVF (pKVM) diagnostic</string>
+    <string name="running_avf_diagnostic">Running AVF diagnostic…</string>
+    <string name="probing_avf">Probing…</string>
+    <string name="export_diagnostic_subject">VMDroid Diagnostic Log</string>
+    <string name="export_diagnostic_chooser">Share diagnostic log</string>
+    <string name="export_diagnostic_failed">Export failed: %1$s</string>
+    <string name="unknown_error">unknown error</string>
+    <string name="verbose_avf_logging">Verbose AVF logging</string>
+    <string name="close">Close</string>
+    <string name="add_port_forward">Add port forward</string>
+    <string name="android_port">Android port</string>
+    <string name="vm_port">VM port</string>
+    <string name="e_g_8080">e.g. 8080</string>
+    <string name="e_g_80">e.g. 80</string>
+    <string name="tcp">TCP</string>
+    <string name="udp">UDP</string>
+    <string name="both">Both</string>
+    <string name="enter_valid_ports">Enter valid port numbers (1–65535)</string>
+    <string name="port_already_forwarded">Port %1$d (%2$s) is already forwarded</string>
+    <string name="port_reserved">Port %1$d is reserved for the in-app desktop</string>
+    <string name="port_forward_table_full">Limit of %1$d port forwards reached. Remove one first.</string>
+    <string name="port_forward_partial_add">Port %1$d: %2$s could not be added, the port forward limit was reached.</string>
+    <string name="reset">Reset</string>
+    <string name="remove">Remove</string>
+    <string name="port_forward_purpose_ssh">SSH</string>
+    <string name="port_forward_purpose_ssh_off">SSH (off)</string>
+    <string name="port_forward_purpose_vnc">Desktop, this phone only</string>
+    <string name="port_forward_purpose_audio">Desktop audio, this phone only</string>
+    <string name="port_forwards_count">Port forwards (%1$d)</string>
+    <string name="port_forwards_clean">Clean all</string>
+    <string name="port_forwards_clean_confirm_title">Remove all port forwards?</string>
+    <string name="port_forwards_clean_confirm_body">This removes all %1$d forwarding rules. VMDroid\'s own forwards (SSH, display, audio) are not affected.</string>
+    <string name="port_forwards_clean_confirm_btn">Remove all</string>
+    <string name="none">None</string>
+    <string name="active">active</string>
+    <string name="off">Off</string>
+    <string name="on">On</string>
+
+    <!-- Status monitor -->
+    <string name="status_page_title">Status</string>
+    <string name="status_phone_section">Phone</string>
+    <string name="status_vm_section">Virtual machine</string>
+    <string name="status_load_average">Load average (1 / 5 / 15 min)</string>
+    <string name="status_vm_ram_allocated">VM RAM (allocated)</string>
+    <string name="status_emulator_rss">Emulator using %1$s</string>
+    <string name="status_vm_disk">VM disk image</string>
+    <string name="status_error">Error</string>
+    <string name="status_refresh_hint">Refreshes every 2 seconds while this screen is open.</string>
+    <string name="status_vm_load_graph_title">VM CPU load</string>
+    <string name="status_vm_load_current">Current: %1$d%%</string>
+    <string name="status_vm_load_collecting">Collecting samples…</string>
+    <string name="status_vm_load_waiting">Start the VM to see load</string>
+    <string name="status_vm_load_stopped">VM is not running</string>
+    <string name="status_vm_load_avf_only">Load graph is available on the QEMU backend while the VM is running</string>
+    <string name="status_vm_load_graph_hint">Tracks the emulator process CPU use on your phone, normalized to the VM\'s allocated cores.</string>
+    <string name="status_vm_load_axis" formatted="false">Last ~2 min · 0% (idle) → 100% (all VM cores busy)</string>
+
+    <!-- Container backup -->
+    <string name="container_backup_title">Container backup</string>
+    <string name="container_backup_settings_subtitle">Export containers &amp; images</string>
+    <string name="container_backup_description">Export Podman containers or save images to tar archives. Run the copied commands in the terminal inside the VM.</string>
+    <string name="container_backup_location">Backup location</string>
+    <string name="container_backup_guest_path">Guest path</string>
+    <string name="container_backup_phone_path">On phone (Downloads)</string>
+    <string name="container_backup_phone_path_value">Download/Podroid/backups</string>
+    <string name="container_backup_downloads_hint">Enable Downloads sharing in Settings so backups appear on your phone.</string>
+    <string name="container_backup_export">Export container</string>
+    <string name="container_backup_vm_stopped">Start the VM before running backup commands.</string>
+    <string name="container_backup_container_name">Container name</string>
+    <string name="container_backup_copy_export">Copy export command</string>
+    <string name="container_backup_save_image">Save image</string>
+    <string name="container_backup_image_ref">Image reference</string>
+    <string name="container_backup_image_placeholder">docker.io/library/nginx:latest</string>
+    <string name="container_backup_copy_save">Copy save command</string>
+    <string name="container_backup_tools">Tools</string>
+    <string name="container_backup_copy_list">Copy list command</string>
+    <string name="container_backup_copy_all">Copy backup-all command</string>
+    <string name="container_backup_terminal_hint">Paste into the VMDroid terminal. podroid-backup is included in newer guest images; older images fall back to podman export automatically.</string>
+    <string name="container_backup_on_phone">Backups on phone</string>
+    <string name="container_backup_refresh">Refresh list</string>
+    <string name="container_backup_none">No backup archives found in Downloads/Podroid/backups yet.</string>
+    <string name="container_backup_list_error">Couldn\'t read the backup folder. Try Refresh.</string>
+    <string name="container_backup_copied">Command copied</string>
+
+    <!-- Home -->
+    <string name="home_containers_created">Containers created</string>
+    <string name="home_containers_count">%1$d</string>
+    <string name="home_containers_unknown">—</string>
+    <string name="home_action_backup">Backup</string>
+    <string name="home_action_status">Status</string>
+
+    <string name="up">Up</string>
+    <string name="uptime_hours_minutes">%1$dh %2$dm</string>
+    <string name="uptime_minutes_seconds">%1$dm %2$ds</string>
+    <string name="uptime_seconds">%1$ds</string>
+
+    <!-- AVF Hint -->
+    <string name="avf_available">AVF (KVM) available on this device</string>
+    <string name="avf_hint_needs_pc">Needs a PC with adb, or the Shizuku app for on-device grant. Run once:</string>
+    <string name="avf_grant_commands">adb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.MANAGE_VIRTUAL_MACHINE\nadb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.USE_CUSTOM_VIRTUAL_MACHINE</string>
+
+    <!-- Backend fallback (#66): AVF was forced but this device can't run it -->
+    <string name="backend_fallback_suffix">" - AVF unavailable, running QEMU"</string>
+    <string name="backend_avf_unavailable">AVF is not available on this device: %1$s</string>
+    <string name="backend_fallback_banner">AVF was selected but is unavailable on this device. The VM is running on QEMU (software emulation).</string>
+    <string name="backend_fallback_reason_feature">the virtualization framework feature is not present</string>
+    <string name="backend_fallback_reason_permissions">required permissions have not been granted</string>
+    <string name="backend_fallback_reason_service">the system service is unreachable</string>
+    <string name="backend_fallback_reason_protected_only">this device only supports protected virtual machines</string>
+
+    <!-- Permissions -->
+    <string name="permissions">Permissions</string>
+    <string name="permissions_description">VMDroid needs these to run the VM reliably.</string>
+    <string name="permissions_needed">Permissions needed</string>
+    <string name="perm_notifications_title">Notifications</string>
+    <string name="perm_notifications_why">Shows the VM\'s state and lets you stop it from the notification shade.</string>
+    <string name="perm_battery_title">Unrestricted background</string>
+    <string name="perm_battery_why">Keeps the VM running when the app is in the background.</string>
+    <string name="perm_grant">Grant</string>
+    <string name="perm_granted">Granted</string>
+
+    <!-- Setup Steps -->
+    <string name="step_1_of_5">Step 1 of 5</string>
+    <string name="step_2_of_5">Step 2 of 5</string>
+    <string name="step_3_of_5">Step 3 of 5</string>
+    <string name="step_4_of_5">Step 4 of 5</string>
+    <string name="step_5_of_5">Step 5 of 5</string>
+
+    <!-- Dialogs -->
+    <string name="update_available">Update available</string>
+    <string name="version_available">Version %1$s is available. You have %2$s.</string>
+    <string name="update_open_failed">Couldn\'t open the download page. No browser available?</string>
+
+    <!-- Language -->
+    <string name="language_label">Language</string>
+    <string name="system_default">System default</string>
+    <string name="language_zh">中文 (Chinese)</string>
+    <string name="language_en">English</string>
+
+    <!-- Error -->
+    <string name="error_title">Error</string>
+    <string name="try_again">Try again</string>
+
+    <!-- Sharing -->
+    <string name="sharing">Sharing</string>
+
+    <!-- Terminal -->
+    <string name="paste_text">Paste</string>
+    <string name="copy_text">Copy</string>
+    <string name="text_selection_more">More…</string>
+    <string name="terminal_title">Terminal</string>
+    <string name="vm_not_running_hint">Start the VM from the Home screen first.</string>
+    <string name="back_to_home">Back to Home</string>
+    <string name="terminal_disconnected_tap_retry">Disconnected. Tap to reconnect.</string>
+
+    <!-- Terminal Quick Settings -->
+    <string name="display_section">Display</string>
+    <string name="size_label">Size</string>
+    <string name="theme_with_value">Theme · %1$s</string>
+    <string name="font_with_value">Font · %1$s</string>
+    <string name="input_section">Input</string>
+    <string name="extra_keys">Extra keys</string>
+    <string name="haptics">Haptics</string>
+    <string name="color_themes">Color themes</string>
+    <string name="fonts">Fonts</string>
+    <string name="import_label">Import</string>
+    <string name="paste_url">Paste URL</string>
+    <string name="add_btn">+ Add</string>
+    <string name="remove_font_question">Remove font?</string>
+    <string name="remove_theme_question">Remove theme?</string>
+    <string name="item_will_be_deleted">"%1$s" will be deleted.</string>
+    <string name="delete_label">Delete</string>
+    <string name="search_n_items">Search %1$d</string>
+    <string name="import_theme">Import theme</string>
+    <string name="import_theme_hint">Paste a terminalcolors.com theme URL.</string>
+    <string name="import_theme_error">Couldn\'t import — check the URL.</string>
+    <string name="importing">Importing…</string>
+
+    <!-- X11 -->
+    <string name="x11_title">X11</string>
+    <string name="x11_open">Open X11 desktop</string>
+    <string name="x11_connecting">Connecting to X11 server...</string>
+    <string name="x11_not_ready">X11 server not ready — VM still booting?</string>
+    <string name="fullscreen">Fullscreen</string>
+    <string name="keyboard">Keyboard</string>
+    <string name="terminal">Terminal</string>
+    <string name="resolution">Resolution</string>
+    <string name="match_viewport">Match viewport</string>
+    <string name="preset">Preset</string>
+    <string name="custom_resolution">Custom</string>
+    <string name="res_720p">720p</string>
+    <string name="res_900p">900p</string>
+    <string name="res_1080p">1080p</string>
+    <string name="res_1440p">1440p</string>
+    <string name="x11_render_scale">Render scale</string>
+    <string name="x11_render_scale_hint">Lower is faster. The desktop is scaled up to fit the screen.</string>
+    <string name="rotation">Rotation</string>
+    <string name="auto_rotation">Auto</string>
+    <string name="landscape">Landscape</string>
+    <string name="portrait">Portrait</string>
+    <string name="touch">Touch</string>
+    <string name="direct_touch">Direct touch</string>
+    <string name="trackpad">Trackpad</string>
+    <string name="pointer_speed">Pointer speed</string>
+    <string name="pointer_acceleration">Pointer acceleration</string>
+    <string name="display">Display</string>
+    <string name="show_extra_keys">Show extra keys</string>
+    <string name="start_fullscreen">Start in fullscreen</string>
+    <string name="server_dpi">Server DPI</string>
+    <string name="applies_on_next_vm_start">Applies on next VM start</string>
+    <string name="width">Width</string>
+    <string name="height">Height</string>
+    <!-- Misc -->
+    <string name="add">Add</string>
+    <string name="version_label">Version</string>
+    <string name="qemu_label">QEMU</string>
+    <string name="stop_vm_before_edit">Stop the VM before editing — changes apply on next boot.</string>
+
+    <!-- USB Passthrough -->
+    <string name="usb_passthrough">USB Passthrough</string>
+    <string name="usb_passthrough_description">Optional. Hot-plug external USB devices (Wi-Fi, storage, serial, etc.) into the VM at runtime.</string>
+    <string name="enable_usb_passthrough">Enable USB passthrough</string>
+    <string name="usb_devices_section">Devices</string>
+    <string name="usb_passthrough_available">Each device asks for permission when you plug it in. Adds a USB controller to the VM, which costs a little emulation overhead, so leave it off if you do not need it. You can change this later in Settings.</string>
+    <string name="usb_passthrough_unavailable">Not available on this backend: USB passthrough needs QEMU control socket, which the AVF backend does not provide. You can change this later in Settings.</string>
+    <string name="usb_passthrough_settings_label">USB passthrough</string>
+    <string name="usb_passthrough_settings_description_available">Hot-plugs external USB devices (Wi-Fi, storage, serial, etc.) into the VM. Each device asks for permission when attached. Adds a USB controller at boot, so restart the VM to apply.</string>
+    <string name="usb_passthrough_settings_description_unavailable">Not available on the %1$s backend: USB passthrough rides QEMU\'s QMP control socket, which the AVF backend doesn\'t provide.</string>
+    <string name="server_mode">Server mode</string>
+    <string name="server_mode_desc">Keeps the VM running with the screen blacked out to save power. The app stays in the foreground so the VM is never stopped. To exit, press and hold anywhere for 3 seconds.</string>
+    <string name="server_mode_enable">Enable server mode</string>
+    <string name="server_mode_exit_hint">Hold 3 seconds to exit</string>
+
+    <!-- AVF Boot Failure -->
+    <string name="avf_boot_failed_try_one_core">AVF failed to boot on this device. Try setting CPU cores to 1, or switch the backend to QEMU.</string>
+    <string name="avf_boot_failed_switch_qemu">AVF couldn\'t boot on this device. Switch the backend to QEMU.</string>
+    <string name="avf_action_use_one_core">Use 1 core</string>
+    <string name="avf_action_switch_qemu">Switch to QEMU</string>
+    <string name="avf_action_retry">Retry</string>
+    <string name="avf_net_workaround_failed">A compatibility step needed for AVF networking failed on this device. Linux may start without network access. If so, switch the backend to QEMU.</string>
+
+    <!-- Boot image selector (§8.2) -->
+    <string name="boot_image_label">Boot image</string>
+    <string name="boot_image_placeholder">Select a system image</string>
+    <string name="boot_image_checking">Verifying…</string>
+    <string name="boot_image_running_hint">Stop the VM before switching images</string>
+    <string name="boot_image_empty_title">No system image installed</string>
+    <string name="image_download_first">Download debian.img</string>
+    <string name="image_import_entry">Import .img from file</string>
+    <string name="image_download_more">Download more images online…</string>
+    <string name="image_corrupt">Corrupt</string>
+    <string name="image_list_load_failed">Couldn\'t load the image list.</string>
+    <string name="image_activated_next_boot">Activated — takes effect on next start</string>
+    <string name="image_reverify">Verify again</string>
+    <string name="image_redownload">Download again</string>
+    <string name="image_imported">Imported %1$s</string>
+    <string name="image_verify_ok">Verification passed</string>
+    <string name="image_verify_failed">Verification failed — the image is corrupt</string>
+    <string name="image_err_not_an_image">Not a VMDroid .img — pack one with Podroid-Debian tools/mkimg.sh (see the project README).</string>
+    <string name="image_err_corrupt">The image is corrupt. Verify again or re-download it.</string>
+    <string name="image_err_format">This image\'s format is too new for the current app version.</string>
+    <string name="image_err_arch">This image\'s architecture doesn\'t match this device.</string>
+    <string name="image_err_app_old">This image requires a newer version of the app.</string>
+    <string name="image_err_missing">The image file is missing — import it again.</string>
+    <string name="image_err_generic">Image operation failed: %1$s</string>
+
+    <!-- Activation reset dialog (§8.5) -->
+    <string name="reset_dialog_title">Reset VM data?</string>
+    <string name="reset_dialog_body">The target image differs from the current system (%1$s → %2$s). To stay bootable, the VM data disk storage.img must be wiped.</string>
+    <string name="reset_dialog_deletes">Will delete: container data, installed apt/apk packages, /root contents</string>
+    <string name="reset_dialog_keeps">Won\'t delete: downloaded system images</string>
+    <string name="reset_confirm_switch">Reset &amp; switch</string>
+    <string name="reset_confirm_keep">Switch (keep data)</string>
+    <string name="reset_advanced_keep">Advanced: keep data (may not boot)</string>
+
+    <!-- M4: image download notifications (§6.2 / §8.3) -->
+    <string name="channel_download_name">System image downloads</string>
+    <string name="notif_download_title">Downloading %1$s</string>
+    <string name="notif_download_progress">%1$d%% · %2$s</string>
+    <string name="notif_download_done">%1$s download complete</string>
+    <string name="notif_download_fail">%1$s download failed</string>
+
+    <!-- M4: images page (§8.3) -->
+    <string name="images_title">System images</string>
+    <string name="images_installed_section">Installed</string>
+    <string name="images_catalog_section">Online catalog</string>
+    <string name="images_empty">No system image installed</string>
+    <string name="images_set_active">Set as boot image</string>
+    <string name="images_verify">Verify</string>
+    <string name="images_verify_now">Verify now</string>
+    <string name="images_factory_reset">Factory reset</string>
+    <string name="images_remove">Remove</string>
+    <string name="images_status_active">Active</string>
+    <string name="images_verifying">Verifying…</string>
+    <string name="images_import">Import .img from file…</string>
+    <string name="images_refresh">Refresh</string>
+    <string name="images_subscribe">Subscription settings</string>
+    <string name="images_subscribe_hint">Catalog URL (catalog.json)</string>
+    <string name="images_subscribe_save">Save</string>
+    <string name="images_download_retry">Download failed — tap to retry</string>
+    <string name="images_wifi_only">Wi-Fi only</string>
+    <string name="images_catalog_empty">No images in the catalog</string>
+    <string name="images_catalog_loading">Loading catalog…</string>
+    <string name="images_catalog_error">Couldn\'t load the image catalog: %1$s</string>
+    <string name="images_catalog_malformed">Malformed image catalog</string>
+    <string name="images_catalog_sig_invalid">Image catalog signature invalid</string>
+    <string name="images_eta">%1$s left</string>
+    <string name="images_remove_confirm_title">Remove image?</string>
+    <string name="images_remove_confirm_body">This deletes %1$s and its verification record.</string>
+    <string name="images_remove_active_warn">The active image will be removed too — you\'ll need to pick another one before starting.</string>
+    <string name="images_removed">Removed %1$s</string>
+    <string name="images_factory_confirm_title">Factory reset VM data?</string>
+    <string name="images_factory_confirm_body">Wipes storage.img (container data, installed packages, /root). It is re-formatted automatically on next start.</string>
+    <string name="images_factory_done">Storage wiped — takes effect on next start</string>
+    <string name="images_err_storage_full">Not enough storage to download</string>
+    <string name="images_stop_vm_first">Stop the VM first</string>
+    <string name="settings_downloads_wifi_only">Download over Wi-Fi only</string>
+</resources>

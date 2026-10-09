@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Updates &amp; migrations &middot; Podroid docs</title>
+  <meta name="description" content="How Podroid updates the guest system layer across app versions with no VM reset and no data loss, and how to ship imperative migration scripts." />
+  <link rel="icon" type="image/png" href="../logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav>
+    <a class="nav-logo" href="../index.html"><img src="../logo.png" alt="Podroid" />Podroid</a>
+    <button class="menu-toggle" aria-label="Toggle menu">&#9776;</button>
+    <ul class="nav-links">
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="index.html" class="cta">Docs</a></li>
+      <li><a href="https://github.com/ExTV/Podroid">GitHub</a></li>
+    </ul>
+  </nav>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <h4>Getting started</h4>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="getting-started.html">Getting started</a></li>
+        <li><a href="how-it-works.html">How it works</a></li>
+      </ul>
+      <h4>Going deeper</h4>
+      <ul>
+        <li><a href="performance.html">Performance &amp; why it's slow</a></li>
+        <li><a href="backends.html">Backends: QEMU &amp; AVF</a></li>
+        <li><a href="networking.html">Networking &amp; ports</a></li>
+        <li><a href="packages.html">Packages &amp; services</a></li>
+        <li><a href="migrations.html" class="active">Updates &amp; migrations</a></li>
+        <li><a href="desktop.html">Desktops &amp; X11 viewer</a></li>
+        <li><a href="settings.html">Terminal &amp; settings</a></li>
+      </ul>
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="limitations.html">Limitations &amp; troubleshooting</a></li>
+        <li><a href="use-cases.html">Use cases</a></li>
+      </ul>
+    </aside>
+
+    <main class="content">
+      <h1>Updates &amp; migrations</h1>
+      <p class="lead">When you update Podroid, the guest system layer refreshes automatically on the next boot. Your installed packages, edited configs, running services, containers, and home directory are all preserved - no VM reset, no reinstall.</p>
+
+      <h2>The model: squashfs lower + persistent upper</h2>
+      <p>The guest filesystem is a two-layer overlayfs:</p>
+
+      <ul>
+        <li>The <strong>read-only lower</strong> is the Alpine squashfs shipped inside the APK. It is re-extracted into app storage on every app update, so a fresh version of the system layer is always available after an install.</li>
+        <li>The <strong>persistent upper</strong> is an ext4 image on <code>/dev/vda</code> (the <code>storage.img</code> file in app storage). Everything you write inside the VM lives here: <code>apk add</code> results, config edits, <code>rc-update</code> changes, containers, <code>/root</code>.</li>
+      </ul>
+
+      <p>Plain overlayfs (without <code>metacopy</code>, <code>index</code>, or <code>redirect_dir</code>) does not bind the upper to a specific lower. Swapping in a new squashfs and rebooting is enough to pick up updated system files, while the upper layer remains untouched. This is the entire mechanism - no migration tooling is needed for ordinary file updates.</p>
+
+      <div class="callout note">
+        <span class="label">One caveat</span>
+        <p>If you changed a file that also changed in the new system layer, and your change was metadata-only (permissions, ownership, timestamps) rather than content, the upper's metadata entry shadows the new lower file. This is rare and easy to resolve: delete the upper's copy with <code>rm</code> and the new system version appears immediately. Content changes always win because the upper copy takes precedence over the lower.</p>
+      </div>
+
+      <h2>The version contract</h2>
+      <p>Two version markers track where the guest stands relative to the app:</p>
+
+      <table>
+        <thead>
+          <tr><th>File</th><th>What it contains</th><th>Owned by</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/etc/podroid/system-version</code></td>
+            <td>The <code>versionCode</code> baked into the squashfs at build time</td>
+            <td>Read-only squashfs (updates with every app release)</td>
+          </tr>
+          <tr>
+            <td><code>/mnt/persist/.podroid/applied-version</code></td>
+            <td>The last <code>versionCode</code> that migration scripts have been run for</td>
+            <td>Persistent upper (written by <code>podroid-migrate</code>)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>On each boot the <code>podroid-migrate</code> OpenRC service compares the two values. If <code>applied-version</code> is behind <code>system-version</code>, it runs all pending migration scripts in order and advances the marker.</p>
+
+      <h2>One-time legacy normalization</h2>
+      <p>Earlier releases mounted the overlay with <code>metacopy=on</code>/<code>index=on</code>/<code>redirect_dir=on</code>. These options record inode references from the lower in the upper, so the upper becomes tied to that specific lower image. Replacing the lower without clearing that state corrupts the overlay.</p>
+
+      <p>On the first boot after updating to a version that uses the plain overlay, <code>init-podroid</code> runs <code>podroid-overlay-normalize</code> before stacking the overlay. This tool strips the metacopy and redirect xattrs from any upper entries that carry them, making the upper safe to use with the new lower. It runs once - a marker file at <code>/mnt/persist/.podroid/normalized</code> prevents it from running again. On a fresh install there is nothing to normalize and the tool exits immediately.</p>
+
+      <div class="callout note">
+        <span class="label">Conservative by design</span>
+        <p>The normalizer only removes xattrs (<code>trusted.overlay.metacopy</code>, <code>trusted.overlay.redirect</code>, <code>trusted.overlay.impure</code>) that it placed there; it does not touch file content. If something goes wrong, the worst outcome is a file that reads from the lower instead of the upper - the upper content is never deleted.</p>
+      </div>
+
+      <h2>What is preserved across an update</h2>
+      <p>Everything on the persistent upper survives. Concretely:</p>
+
+      <ul>
+        <li>Packages installed with <code>apk add</code></li>
+        <li>Config files you edited under <code>/etc</code></li>
+        <li>Services added with <code>rc-update add</code></li>
+        <li>Containers, images, and volumes managed by Podman, Docker, or LXC</li>
+        <li><code>/root</code> and any other home directories</li>
+        <li>Any files you created or modified anywhere in the guest filesystem</li>
+      </ul>
+
+      <p>What changes are the system files that Podroid ships in the squashfs - OpenRC service scripts, binaries like <code>podroid-hostd</code>, kernel modules, base configs - but only where the upper does not already shadow them.</p>
+
+      <h2>Adding a migration script</h2>
+      <p>Pure file additions and content changes ship automatically with the squashfs - no script needed. A script is only required when a structural change must happen at runtime, such as enabling a newly-added service, creating a device node, or writing a config that depends on the running system state.</p>
+
+      <p>To ship a migration for a new release:</p>
+
+      <ol>
+        <li>Create <code>build-rootfs/files/etc/podroid/migrations/&lt;versionCode&gt;.sh</code>. Use the app's <code>versionCode</code> (an integer, found in <code>app/build.gradle.kts</code>) as the filename.</li>
+        <li>Make the script <strong>idempotent</strong>. It may run more than once if the guest crashes mid-migration; it must be safe to re-run.</li>
+        <li>That is all. Every <code>*.sh</code> file in that directory is copied into the squashfs and made executable by the rootfs build, so no build script edit is needed.</li>
+      </ol>
+
+      <p>Example - enabling a newly-added service:</p>
+
+      <pre><code><span class="c">#!/bin/sh
+# migrations/26.sh - enable my-service added in versionCode 26
+# idempotent: rc-update -u is a no-op if the link already exists</span>
+rc-update -u add my-service default</code></pre>
+
+      <p><code>podroid-migrate</code> runs scripts in numeric order, so a script for versionCode 26 runs before one for 27. After all pending scripts complete, <code>applied-version</code> is updated atomically. A crash before that point means the scripts run again on the next boot - which is why idempotency matters.</p>
+
+      <div class="callout note">
+        <span class="label">No script needed for most changes</span>
+        <p>If you add a new binary, replace an OpenRC service script, or edit a base config, just update the file in <code>build-rootfs/files/</code> and rebuild the squashfs. The overlay union surfaces the new lower file automatically on the next boot, as long as the user has not already written a conflicting upper copy at that path.</p>
+      </div>
+
+      <div class="pagenav">
+        <a class="prev" href="packages.html"><span class="dir">Previous</span>&larr; Packages &amp; services</a>
+        <a class="next" href="desktop.html"><span class="dir">Next</span>Desktops &amp; X11 viewer &rarr;</a>
+      </div>
+      <p class="docfoot">Podroid is free software (GPL). Docs for v1.2.9. Found something inaccurate? <a href="https://github.com/ExTV/Podroid/issues">Open an issue</a>.</p>
+    </main>
+  </div>
+
+  <script>
+    document.querySelector('.menu-toggle').addEventListener('click', function () {
+      document.querySelector('.sidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

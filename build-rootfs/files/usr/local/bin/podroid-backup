@@ -1,0 +1,135 @@
+#!/bin/sh
+# Podroid container backup — export containers/images to tar archives.
+# With Downloads sharing: /mnt/downloads/Podroid/backups/
+# Otherwise: /var/backups/podroid/
+set -eu
+
+backup_root() {
+	if mountpoint -q /mnt/downloads 2>/dev/null; then
+		printf '%s\n' "/mnt/downloads/Podroid/backups"
+	else
+		printf '%s\n' "/var/backups/podroid"
+	fi
+}
+
+notify_ok() {
+	body="$1"
+	if command -v podroid-notify >/dev/null 2>&1; then
+		podroid-notify --title "Podroid backup" "$body" 2>/dev/null || true
+	fi
+}
+
+notify_err() {
+	body="$1"
+	if command -v podroid-notify >/dev/null 2>&1; then
+		podroid-notify --priority high --title "Podroid backup failed" "$body" 2>/dev/null || true
+	fi
+}
+
+usage() {
+	cat <<'EOF'
+usage:
+  podroid-backup list
+  podroid-backup export <container> [output.tar]
+  podroid-backup save <image> [output.tar]
+  podroid-backup all
+
+Examples:
+  podroid-backup list
+  podroid-backup export my-nginx
+  podroid-backup save docker.io/library/nginx:latest
+  podroid-backup all
+EOF
+}
+
+cmd_list() {
+	if ! command -v podman >/dev/null 2>&1; then
+		echo "podman not found" >&2
+		return 1
+	fi
+	podman ps -a --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}'
+}
+
+safe_name() {
+	printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+cmd_export() {
+	name="$1"
+	out="${2:-}"
+	root="$(backup_root)"
+	mkdir -p "$root"
+	if [ -z "$out" ]; then
+		stamp="$(date +%Y%m%d-%H%M%S)"
+		out="$root/$(safe_name "$name")-$stamp.tar"
+	fi
+	if ! podman export "$name" -o "$out"; then
+		notify_err "export failed for $name"
+		return 1
+	fi
+	echo "exported $name -> $out"
+	notify_ok "Exported container $name"
+}
+
+cmd_save() {
+	ref="$1"
+	out="${2:-}"
+	root="$(backup_root)"
+	mkdir -p "$root"
+	if [ -z "$out" ]; then
+		stamp="$(date +%Y%m%d-%H%M%S)"
+		out="$root/$(safe_name "$ref")-$stamp.tar"
+	fi
+	if ! podman save "$ref" -o "$out"; then
+		notify_err "save failed for $ref"
+		return 1
+	fi
+	echo "saved $ref -> $out"
+	notify_ok "Saved image $ref"
+}
+
+cmd_all() {
+	root="$(backup_root)"
+	mkdir -p "$root"
+	ok=0
+	fail=0
+	for id in $(podman ps -aq 2>/dev/null); do
+		name="$(podman inspect -f '{{.Name}}' "$id" 2>/dev/null | sed 's#^/##')"
+		[ -n "$name" ] || name="$id"
+		stamp="$(date +%Y%m%d-%H%M%S)"
+		out="$root/$(safe_name "$name")-$stamp.tar"
+		if podman export "$name" -o "$out" 2>/dev/null; then
+			ok=$((ok + 1))
+			echo "exported $name -> $out"
+		else
+			fail=$((fail + 1))
+			echo "failed $name" >&2
+		fi
+	done
+	notify_ok "Backed up $ok container(s)${fail:+, $fail failed}"
+	echo "done: $ok ok, $fail failed"
+}
+
+main() {
+	if ! command -v podman >/dev/null 2>&1; then
+		echo "podman not installed" >&2
+		return 1
+	fi
+
+	case "${1:-}" in
+		list)   cmd_list ;;
+		export)
+			[ $# -ge 2 ] || { usage; return 2; }
+			cmd_export "$2" "${3:-}"
+			;;
+		save)
+			[ $# -ge 2 ] || { usage; return 2; }
+			cmd_save "$2" "${3:-}"
+			;;
+		all)    cmd_all ;;
+		-h|--help|help|"") usage ;;
+		*) echo "unknown command: $1" >&2; usage; return 2 ;;
+	esac
+}
+
+main "$@"

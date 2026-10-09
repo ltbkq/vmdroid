@@ -1,0 +1,156 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034
+description="Podroid VM networking (10.0.2.15 via SLIRP)"
+
+# Validate only plain dotted-quad IPv4 literals before they reach resolv.conf.
+# Keep this separate from qemu_resolv_conf so the resolver ordering can be
+# regression-tested without starting OpenRC or touching the host's /etc.
+is_valid_ipv4() {
+    case "$1" in
+        ''|*[!0-9.]*|.*|*.|*..*) return 1 ;;
+    esac
+    _old_ifs=$IFS
+    IFS=.
+    # Intentional splitting on dots after the character allowlist above.
+    # shellcheck disable=SC2086
+    set -- $1
+    IFS=$_old_ifs
+    [ "$#" -eq 4 ] || return 1
+    for _octet in "$@"; do
+        case "$_octet" in ''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+        [ "$_octet" -le 255 ] 2>/dev/null || return 1
+    done
+}
+
+# Print the QEMU resolver file. Device resolvers occupy up to two slots in
+# their original order; the remaining slots use the existing public fallbacks,
+# without duplicates. With no valid device resolver, retain the original
+# 10.0.2.3 / public fallback behavior.
+qemu_resolv_conf() {
+    _dns_raw=$1
+    DEVICE_DNS_1=""
+    DEVICE_DNS_2=""
+
+    # Reject the whole cmdline value if it contains anything outside the
+    # comma-separated dotted-quad grammar. This also prevents field splitting
+    # or pathname expansion from interpreting attacker-controlled characters.
+    case "$_dns_raw" in *[!0-9.,]*) _dns_raw="" ;; esac
+    if [ -n "$_dns_raw" ]; then
+        _old_ifs=$IFS
+        IFS=,
+        # The character allowlist makes this expansion safe and glob-free.
+        # shellcheck disable=SC2086
+        set -- $_dns_raw
+        IFS=$_old_ifs
+        for _cand in "$@"; do
+            is_valid_ipv4 "$_cand" || continue
+            case "$_cand" in 127.*|0.0.0.0) continue ;; esac
+            [ "$_cand" = "$DEVICE_DNS_1" ] && continue
+            [ "$_cand" = "$DEVICE_DNS_2" ] && continue
+            if [ -z "$DEVICE_DNS_1" ]; then
+                DEVICE_DNS_1=$_cand
+            elif [ -z "$DEVICE_DNS_2" ]; then
+                DEVICE_DNS_2=$_cand
+            fi
+        done
+    fi
+
+    if [ -z "$DEVICE_DNS_1" ]; then
+        printf 'nameserver 10.0.2.3\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n'
+        return
+    fi
+
+    printf 'nameserver %s\n' "$DEVICE_DNS_1"
+    _resolver_count=1
+    if [ -n "$DEVICE_DNS_2" ]; then
+        printf 'nameserver %s\n' "$DEVICE_DNS_2"
+        _resolver_count=2
+    fi
+    if [ "$_resolver_count" -lt 3 ] &&
+        [ "$DEVICE_DNS_1" != "8.8.8.8" ] && [ "$DEVICE_DNS_2" != "8.8.8.8" ]; then
+        printf 'nameserver 8.8.8.8\n'
+        _resolver_count=$((_resolver_count + 1))
+    fi
+    if [ "$_resolver_count" -lt 3 ] &&
+        [ "$DEVICE_DNS_1" != "1.1.1.1" ] && [ "$DEVICE_DNS_2" != "1.1.1.1" ]; then
+        printf 'nameserver 1.1.1.1\n'
+    fi
+}
+
+depend() {
+    need podroid-bootstrap
+    before podroid-ready dropbear
+    provide net
+}
+
+start() {
+    ebegin "Configuring network..."
+    echo "Configuring containers..." > /dev/console
+    ip link set lo up 2>/dev/null
+    NETIF=""
+    for _i in $(seq 1 10); do
+        # Exclude virtual/bridge devices so the real virtio NIC is picked.
+        # The LXC bridge lxcbr0 (brought up by the dnsmasq.lxcbr0 service),
+        # podman/docker/cni bridges, and veth pairs would otherwise be
+        # candidates; the grep below filters them all out by name.
+        NETIF=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | \
+            grep -vE '^(lo|dummy[0-9]*|veth|podman|cni|docker|lxcbr|br-)' | head -1)
+        [ -n "$NETIF" ] && break
+        sleep 0.05
+    done
+    if [ -z "$NETIF" ]; then
+        eend 1 "no network interface"
+        return 1
+    fi
+    ip link set "$NETIF" up
+
+    if grep -q 'podroid\.backend=avf' /proc/cmdline 2>/dev/null; then
+        # AVF backend: crosvm wires the guest to a TAP that Android's tethering
+        # manager runs DHCP on. The lease decides our IP / gateway / DNS — the
+        # SLIRP-style 10.0.2.15 hardcode won't sit on the right subnet (on
+        # IPv6-only cellular w/ CLAT it lands on 192.0.0.x). udhcpc applies
+        # everything via the default /usr/share/udhcpc/default.script.
+        udhcpc -i "$NETIF" -t 8 -T 1 -A 1 -q -f -n 2>/dev/null || \
+            udhcpc -i "$NETIF" -q -f -n 2>/dev/null || true
+        # Belt-and-suspenders: if DHCP didn't write resolv.conf (busybox
+        # variants differ), drop public DNS so apk/curl don't die silently.
+        [ -s /etc/resolv.conf ] || printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+        # Don't report success on a total DHCP failure: dependents that
+        # `need` us would start believing the link is up, then SSH/apk fail
+        # with no obvious cause. Surface it instead.
+        if ! ip -o -4 addr show dev "$NETIF" 2>/dev/null | grep -q 'inet '; then
+            eend 1 "DHCP did not assign an address to $NETIF"
+            return 1
+        fi
+    else
+        # QEMU/TCG backend: SLIRP's built-in DHCP also exists but hardcoding
+        # is faster + matches every existing user's setup. Original behavior.
+        ip addr add 10.0.2.15/24 dev "$NETIF" 2>/dev/null
+        ip route add default via 10.0.2.2 dev "$NETIF" 2>/dev/null
+        # SLIRP's 10.0.2.3 DNS forwarder is dead on Android (it reads the
+        # host's /etc/resolv.conf, which doesn't exist here). QemuEngine
+        # passes the device's own resolvers via podroid.dns= when it has any;
+        # re-validate them and put up to two distinct entries first, followed
+        # by deduplicated public fallbacks. No valid device resolver retains
+        # the original 10.0.2.3 / public fallback list.
+        DNS_RAW=$(sed -n 's/.*podroid\.dns=\([0-9.,]*\).*/\1/p' /proc/cmdline 2>/dev/null)
+        qemu_resolv_conf "$DNS_RAW" > /etc/resolv.conf
+        DNS_SERVERS=$(awk '$1 == "nameserver" { if (dns != "") dns = dns " "; dns = dns $2 } END { print dns }' /etc/resolv.conf)
+        echo "DNS: $DNS_SERVERS" > /dev/console
+        # Mirror the AVF post-check: if the static assignment didn't stick
+        # (wrong NIC, link not up), don't report success. Dependents that
+        # `need` us would assume the link is up and then SSH/apk fail with no
+        # obvious cause. Surface it instead.
+        if ! ip -o -4 addr show dev "$NETIF" 2>/dev/null | grep -q 'inet '; then
+            eend 1 "static IP did not stick on $NETIF"
+            return 1
+        fi
+    fi
+    BW_MBIT=$(sed -n 's/.*podroid\.bandwidth=\([0-9]*\).*/\1/p' /proc/cmdline 2>/dev/null)
+    if [ -n "$BW_MBIT" ] && [ "$BW_MBIT" -gt 0 ]; then
+        tc qdisc replace dev "$NETIF" root tbf rate "${BW_MBIT}mbit" burst 32kbit latency 400ms 2>/dev/null || true
+    fi
+    echo "Network found" > /dev/console
+    eend 0
+}

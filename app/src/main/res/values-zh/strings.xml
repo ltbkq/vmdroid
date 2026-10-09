@@ -1,0 +1,424 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Podroid - Rootless Podman for Android
+  Copyright (C) 2024-2026 Podroid contributors
+-->
+<resources>
+    <string name="app_name">VMDroid</string>
+
+    <!-- VM Status -->
+    <string name="vm_status">虚拟机状态</string>
+    <string name="status_starting">启动中</string>
+    <string name="status_running">运行中</string>
+    <string name="status_stopped">已停止</string>
+    <string name="status_idle">空闲</string>
+    <string name="status_stopping">正在关闭…</string>
+    <string name="stopping_vm">正在停止虚拟机…</string>
+    <string name="stopping_action">正在停止…</string>
+
+    <!-- Network -->
+    <string name="network">网络</string>
+    <string name="phone_ip">手机 IP</string>
+    <string name="phone_ip_also">另一地址 (%1$s)</string>
+    <string name="ssh">SSH</string>
+    <string name="port_forwards">端口转发</string>
+
+    <!-- Last Session -->
+    <string name="last_session">上次会话</string>
+    <string name="booted_in">启动耗时</string>
+    <string name="build">版本</string>
+
+    <!-- Actions -->
+    <string name="settings">设置</string>
+    <string name="open_terminal">打开终端</string>
+    <string name="restart">重启</string>
+    <string name="stop">停止</string>
+    <string name="start_vm">启动虚拟机</string>
+    <string name="download">下载</string>
+    <string name="later">稍后</string>
+    <string name="dismiss">关闭</string>
+    <string name="back">返回</string>
+    <string name="continue_label">继续</string>
+    <string name="get_started">开始使用</string>
+    <string name="not_now">暂不</string>
+
+    <!-- Storage -->
+    <string name="persistent_storage">持久化存储</string>
+    <string name="storage_description">用于安装的软件包、容器镜像和您的文件。您可以稍后在设置中增大存储空间，但无法缩小。</string>
+
+    <!-- VM Config -->
+    <string name="configure_vm">配置您的虚拟机</string>
+    <string name="vm_config_description">默认配置针对性能和电池进行了优化。随时可在设置中更改。</string>
+    <string name="resources">资源</string>
+    <string name="cpu_cores">CPU 核心数</string>
+    <string name="cpu_cores_hint">核心越多不一定越快：在 QEMU (TCG) 后端，实测 8 核比 4 核更慢。AVF 后端可正常扩展。</string>
+    <string name="storage_grow_hint">存储空间可以稍后增大，但无法缩小。更大的存储空间将在虚拟机下次启动时生效。</string>
+    <string name="ram_label">内存</string>
+    <string name="network_label">网络</string>
+    <string name="ssh_access">SSH 访问</string>
+    <string name="ssh_password_hint">ssh ltbkq@localhost -p 9922   (密码: 123)</string>
+    <string name="load_balance">负载均衡</string>
+    <string name="load_balance_description">根据本机自动调整 CPU、内存、存储和带宽。</string>
+    <string name="load_balance_storage_hint">存储大小已自动设置。在下一步关闭负载均衡后可手动选择。</string>
+    <string name="bandwidth_limit">带宽限制</string>
+    <string name="bandwidth_unlimited">无限制</string>
+
+    <!-- Storage Access -->
+    <string name="downloads_sharing">下载文件夹共享</string>
+    <string name="storage_access_description">可选。通过 virtio-9p 将 Android 下载文件夹挂载到虚拟机。</string>
+    <string name="enable_downloads_sharing">启用下载文件夹共享</string>
+    <string name="grant_storage_access">授予存储权限</string>
+    <string name="requires_android_11">在此设备上，共享需要授予下方的存储权限（Android 11 及以上使用完整文件访问权限）。</string>
+    <string name="storage_access_warning">警告：某些设备上这可能导致虚拟机崩溃。如果启动失败，请禁用。</string>
+
+    <!-- Settings Sections -->
+    <string name="appearance">外观</string>
+    <string name="dark_theme">深色主题</string>
+    <string name="dynamic_color">动态颜色（Material You）</string>
+    <string name="vm_resources">虚拟机资源</string>
+    <string name="stop_vm_to_change">停止虚拟机后才能更改这些设置。</string>
+    <string name="storage">存储</string>
+    <string name="autostart_on_boot">开机时启动虚拟机</string>
+    <string name="autostart_on_boot_desc">手机启动后自动开启虚拟机。自动化应用也可以通过 io.github.ltbkq.vmdroid.action.START_VM 和 STOP_VM 意图操作触发。</string>
+    <string name="reset_vm">重置虚拟机（删除所有数据）</string>
+    <string name="reset_vm_description">完全重置应用？</string>
+    <string name="reset_vm_text">这将清除所有应用数据，包括虚拟机存储、设置和端口规则。应用将关闭并恢复到刚安装时的状态。</string>
+    <string name="reset_everything">全部重置</string>
+    <string name="cancel">取消</string>
+    <string name="advanced">高级</string>
+    <string name="hide_advanced">隐藏高级选项</string>
+    <string name="show_advanced">显示高级选项</string>
+    <string name="backend">后端</string>
+    <string name="auto">自动</string>
+    <string name="avf_kvm">AVF (KVM)</string>
+    <string name="qemu_tcg">QEMU (TCG)</string>
+    <string name="extra_qemu_args">额外的 QEMU 参数</string>
+    <string name="extra_kernel_cmdline">额外的内核命令行</string>
+    <string name="kernel_cmdline_helper">在 console=ttyAMA0 之后追加 - 控制调度器、缓解措施、日志级别等。</string>
+    <string name="qemu_args_helper">-cpu, -accel, -object, -device, -overcommit 等。空格分隔。</string>
+    <string name="reset_field_confirm_title">重置%1$s？</string>
+    <string name="reset_field_confirm_body">这将清除您的自定义设置并恢复默认值。</string>
+    <string name="about">关于</string>
+    <string name="architecture">架构</string>
+    <string name="linux_distro">Linux 发行版</string>
+    <string name="documentation">文档</string>
+    <string name="export_diagnostic_log">导出诊断日志</string>
+    <string name="avf_diagnostic">AVF (pKVM) 诊断</string>
+    <string name="running_avf_diagnostic">运行 AVF 诊断…</string>
+    <string name="probing_avf">正在探测…</string>
+    <string name="export_diagnostic_subject">VMDroid 诊断日志</string>
+    <string name="export_diagnostic_chooser">分享诊断日志</string>
+    <string name="export_diagnostic_failed">导出失败：%1$s</string>
+    <string name="unknown_error">未知错误</string>
+    <string name="verbose_avf_logging">详细 AVF 日志</string>
+    <string name="close">关闭</string>
+    <string name="add_port_forward">添加端口转发</string>
+    <string name="android_port">Android 端口</string>
+    <string name="vm_port">虚拟机端口</string>
+    <string name="e_g_8080">例如：8080</string>
+    <string name="e_g_80">例如：80</string>
+    <string name="tcp">TCP</string>
+    <string name="udp">UDP</string>
+    <string name="both">两者</string>
+    <string name="enter_valid_ports">输入有效的端口号 (1-65535)</string>
+    <string name="port_already_forwarded">端口 %1$d (%2$s) 已转发</string>
+    <string name="port_reserved">端口 %1$d 已保留给应用内桌面</string>
+    <string name="port_forward_table_full">端口转发已达上限 %1$d 条，请先删除一条。</string>
+    <string name="port_forward_partial_add">端口 %1$d：%2$s 未能添加，端口转发数量已达上限。</string>
+    <string name="reset">重置</string>
+    <string name="remove">删除</string>
+    <string name="port_forward_purpose_ssh">SSH</string>
+    <string name="port_forward_purpose_ssh_off">SSH (已关闭)</string>
+    <string name="port_forward_purpose_vnc">桌面，仅限本机</string>
+    <string name="port_forward_purpose_audio">桌面音频，仅限本机</string>
+    <string name="port_forwards_count">端口转发 (%1$d)</string>
+    <string name="port_forwards_clean">全部清除</string>
+    <string name="port_forwards_clean_confirm_title">移除所有端口转发？</string>
+    <string name="port_forwards_clean_confirm_body">这将移除全部 %1$d 条转发规则。VMDroid 自身的转发（SSH、显示、音频）不受影响。</string>
+    <string name="port_forwards_clean_confirm_btn">全部移除</string>
+    <string name="none">无</string>
+    <string name="active">活动</string>
+    <string name="off">关闭</string>
+    <string name="on">开启</string>
+
+    <!-- Status monitor -->
+    <string name="status_page_title">状态监控</string>
+    <string name="status_phone_section">手机</string>
+    <string name="status_vm_section">虚拟机</string>
+    <string name="status_load_average">平均负载（1 / 5 / 15 分钟）</string>
+    <string name="status_vm_ram_allocated">虚拟机内存（已分配）</string>
+    <string name="status_emulator_rss">模拟器占用 %1$s</string>
+    <string name="status_vm_disk">虚拟机磁盘镜像</string>
+    <string name="status_error">错误</string>
+    <string name="status_refresh_hint">此页面打开时每 2 秒自动刷新。</string>
+    <string name="status_vm_load_graph_title">虚拟机 CPU 负载</string>
+    <string name="status_vm_load_current">当前：%1$d%%</string>
+    <string name="status_vm_load_collecting">正在采集数据…</string>
+    <string name="status_vm_load_waiting">启动虚拟机后显示负载</string>
+    <string name="status_vm_load_stopped">虚拟机未运行</string>
+    <string name="status_vm_load_avf_only">负载图表仅在 QEMU 后端且虚拟机运行时可用</string>
+    <string name="status_vm_load_graph_hint">根据手机上模拟器进程的 CPU 占用计算，并按虚拟机分配的核心数归一化。</string>
+    <string name="status_vm_load_axis" formatted="false">最近约 2 分钟 · 0%（空闲）→ 100%（全部核心繁忙）</string>
+
+    <!-- Container backup -->
+    <string name="container_backup_title">容器备份</string>
+    <string name="container_backup_settings_subtitle">导出容器与镜像</string>
+    <string name="container_backup_description">将 Podman 容器导出或保存镜像为 tar 归档。在虚拟机内的终端中运行复制的命令。</string>
+    <string name="container_backup_location">备份位置</string>
+    <string name="container_backup_guest_path">虚拟机路径</string>
+    <string name="container_backup_phone_path">手机（下载目录）</string>
+    <string name="container_backup_phone_path_value">Download/Podroid/backups</string>
+    <string name="container_backup_downloads_hint">在设置中启用下载目录共享，备份文件会出现在手机上。</string>
+    <string name="container_backup_export">导出容器</string>
+    <string name="container_backup_vm_stopped">运行备份命令前请先启动虚拟机。</string>
+    <string name="container_backup_container_name">容器名称</string>
+    <string name="container_backup_copy_export">复制导出命令</string>
+    <string name="container_backup_save_image">保存镜像</string>
+    <string name="container_backup_image_ref">镜像引用</string>
+    <string name="container_backup_image_placeholder">docker.io/library/nginx:latest</string>
+    <string name="container_backup_copy_save">复制保存命令</string>
+    <string name="container_backup_tools">工具</string>
+    <string name="container_backup_copy_list">复制列表命令</string>
+    <string name="container_backup_copy_all">复制全部备份命令</string>
+    <string name="container_backup_terminal_hint">粘贴到 VMDroid 终端。较新的客户机镜像包含 podroid-backup；旧镜像会自动回退到 podman export。</string>
+    <string name="container_backup_on_phone">手机上的备份</string>
+    <string name="container_backup_refresh">刷新列表</string>
+    <string name="container_backup_none">Downloads/Podroid/backups 中尚未找到备份归档。</string>
+    <string name="container_backup_list_error">无法读取备份文件夹，请点击刷新重试。</string>
+    <string name="container_backup_copied">命令已复制</string>
+
+    <!-- Home -->
+    <string name="home_containers_created">已创建容器</string>
+    <string name="home_containers_count">%1$d</string>
+    <string name="home_containers_unknown">—</string>
+    <string name="home_action_backup">备份</string>
+    <string name="home_action_status">状态</string>
+
+    <string name="up">运行中</string>
+    <string name="uptime_hours_minutes">%1$d小时%2$d分钟</string>
+    <string name="uptime_minutes_seconds">%1$d分%2$d秒</string>
+    <string name="uptime_seconds">%1$d秒</string>
+
+    <!-- AVF Hint -->
+    <string name="avf_available">此设备支持 AVF (KVM)</string>
+    <string name="avf_hint_needs_pc">需要 PC 上的 adb，或设备上的 Shizuku 应用进行授权。运行一次：</string>
+    <string name="avf_grant_commands">adb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.MANAGE_VIRTUAL_MACHINE\nadb shell pm grant io.github.ltbkq.vmdroid \\\n  android.permission.USE_CUSTOM_VIRTUAL_MACHINE</string>
+
+    <!-- Backend fallback (#66): AVF was forced but this device can't run it -->
+    <string name="backend_fallback_suffix">（AVF 不可用，正在使用 QEMU）</string>
+    <string name="backend_avf_unavailable">此设备无法使用 AVF：%1$s</string>
+    <string name="backend_fallback_banner">已选择 AVF，但此设备不可用。虚拟机正在使用 QEMU（软件模拟）运行。</string>
+    <string name="backend_fallback_reason_feature">虚拟化框架功能不受支持</string>
+    <string name="backend_fallback_reason_permissions">所需权限尚未授予</string>
+    <string name="backend_fallback_reason_service">系统服务不可达</string>
+    <string name="backend_fallback_reason_protected_only">此设备仅支持受保护虚拟机</string>
+
+    <!-- Permissions -->
+    <string name="permissions">权限</string>
+    <string name="permissions_description">VMDroid 需要以下权限才能稳定运行虚拟机。</string>
+    <string name="permissions_needed">需要授权</string>
+    <string name="perm_notifications_title">通知</string>
+    <string name="perm_notifications_why">显示虚拟机状态，并可从通知栏停止虚拟机。</string>
+    <string name="perm_battery_title">后台不受限制</string>
+    <string name="perm_battery_why">让虚拟机在应用退到后台时继续运行。</string>
+    <string name="perm_grant">授权</string>
+    <string name="perm_granted">已授权</string>
+
+    <!-- Setup Steps -->
+    <string name="step_1_of_5">第 1 步，共 5 步</string>
+    <string name="step_2_of_5">第 2 步，共 5 步</string>
+    <string name="step_3_of_5">第 3 步，共 5 步</string>
+    <string name="step_4_of_5">第 4 步，共 5 步</string>
+    <string name="step_5_of_5">第 5 步，共 5 步</string>
+
+    <!-- Dialogs -->
+    <string name="update_available">有新版本可用</string>
+    <string name="version_available">版本 %1$s 可用。当前版本 %2$s。</string>
+    <string name="update_open_failed">无法打开下载页面。没有可用的浏览器？</string>
+
+    <!-- Language -->
+    <string name="language_label">语言</string>
+    <string name="system_default">系统默认</string>
+    <string name="language_zh">中文 (Chinese)</string>
+    <string name="language_en">English</string>
+
+    <!-- Error -->
+    <string name="error_title">错误</string>
+    <string name="try_again">重试</string>
+
+    <!-- Sharing -->
+    <string name="sharing">共享</string>
+
+    <!-- Terminal -->
+    <string name="paste_text">粘贴</string>
+    <string name="copy_text">复制</string>
+    <string name="text_selection_more">更多…</string>
+    <string name="terminal_title">终端</string>
+    <string name="vm_not_running_hint">请先从主屏幕启动虚拟机。</string>
+    <string name="back_to_home">返回主屏幕</string>
+    <string name="terminal_disconnected_tap_retry">已断开连接。点按以重新连接。</string>
+
+    <!-- Terminal Quick Settings -->
+    <string name="display_section">显示</string>
+    <string name="size_label">大小</string>
+    <string name="theme_with_value">主题 · %1$s</string>
+    <string name="font_with_value">字体 · %1$s</string>
+    <string name="input_section">输入</string>
+    <string name="extra_keys">扩展按键</string>
+    <string name="haptics">触觉反馈</string>
+    <string name="color_themes">颜色主题</string>
+    <string name="fonts">字体</string>
+    <string name="import_label">导入</string>
+    <string name="paste_url">粘贴 URL</string>
+    <string name="add_btn">+ 添加</string>
+    <string name="remove_font_question">删除字体？</string>
+    <string name="remove_theme_question">删除主题？</string>
+    <string name="item_will_be_deleted">"%1$s" 将被删除。</string>
+    <string name="delete_label">删除</string>
+    <string name="search_n_items">搜索 %1$d 项</string>
+    <string name="import_theme">导入主题</string>
+    <string name="import_theme_hint">粘贴 terminalcolors.com 主题 URL。</string>
+    <string name="import_theme_error">导入失败 — 请检查 URL。</string>
+    <string name="importing">导入中…</string>
+
+    <!-- X11 -->
+    <string name="x11_title">X11</string>
+    <string name="x11_open">打开 X11 桌面</string>
+    <string name="x11_connecting">正在连接 X11 服务器...</string>
+    <string name="x11_not_ready">X11 服务器未就绪 — 虚拟机是否仍在启动？</string>
+    <string name="fullscreen">全屏</string>
+    <string name="keyboard">键盘</string>
+    <string name="terminal">终端</string>
+    <string name="resolution">分辨率</string>
+    <string name="match_viewport">匹配视口</string>
+    <string name="preset">预设</string>
+    <string name="custom_resolution">自定义</string>
+    <string name="res_720p">720p</string>
+    <string name="res_900p">900p</string>
+    <string name="res_1080p">1080p</string>
+    <string name="res_1440p">1440p</string>
+    <string name="x11_render_scale">渲染比例</string>
+    <string name="x11_render_scale_hint">数值越低越流畅，桌面会放大以适应屏幕。</string>
+    <string name="rotation">旋转</string>
+    <string name="auto_rotation">自动</string>
+    <string name="landscape">横屏</string>
+    <string name="portrait">竖屏</string>
+    <string name="touch">触摸</string>
+    <string name="direct_touch">直接触摸</string>
+    <string name="trackpad">触摸板</string>
+    <string name="pointer_speed">指针速度</string>
+    <string name="pointer_acceleration">指针加速度</string>
+    <string name="display">显示</string>
+    <string name="show_extra_keys">显示扩展按键</string>
+    <string name="start_fullscreen">默认全屏启动</string>
+    <string name="server_dpi">服务器 DPI</string>
+    <string name="applies_on_next_vm_start">将在下次虚拟机启动时生效</string>
+    <string name="width">宽度</string>
+    <string name="height">高度</string>
+
+    <!-- Misc -->
+    <string name="add">添加</string>
+    <string name="version_label">版本</string>
+    <string name="qemu_label">QEMU</string>
+    <string name="stop_vm_before_edit">停止虚拟机后才能编辑 — 更改将在下次启动时生效。</string>
+
+    <!-- USB Passthrough -->
+    <string name="usb_passthrough">USB 设备直通</string>
+    <string name="usb_passthrough_description">可选。在虚拟机运行时热插拔外部 USB 设备（Wi-Fi、存储、串口等）。</string>
+    <string name="enable_usb_passthrough">启用 USB 设备直通</string>
+    <string name="usb_devices_section">设备</string>
+    <string name="usb_passthrough_available">插入设备时会询问您的许可。为虚拟机添加 USB 控制器，会带来少量模拟开销，如果不需要可保持关闭。您可在设置中随时更改。</string>
+    <string name="usb_passthrough_unavailable">此后端不可用：USB 设备直通需要 QEMU 控制套接字，而 AVF 后端不提供此功能。您可在设置中随时更改。</string>
+    <string name="usb_passthrough_settings_label">USB 设备直通</string>
+    <string name="usb_passthrough_settings_description_available">在虚拟机中热插拔外部 USB 设备（Wi-Fi、存储、串口等）。设备连接时会询问许可。启动时添加 USB 控制器，因此需要重启虚拟机以应用更改。</string>
+    <string name="usb_passthrough_settings_description_unavailable">%1$s 后端不可用：USB 设备直通需要 QEMU 的 QMP 控制套接字，而 AVF 后端不提供此功能。</string>
+    <string name="server_mode">服务器模式</string>
+    <string name="server_mode_desc">在屏幕变黑的情况下保持虚拟机运行以省电。应用会保持在前台，因此虚拟机不会被停止。要退出，请在任意位置长按 3 秒。</string>
+    <string name="server_mode_enable">启用服务器模式</string>
+    <string name="server_mode_exit_hint">长按 3 秒退出</string>
+
+    <!-- AVF Boot Failure -->
+    <string name="avf_boot_failed_try_one_core">AVF 在此设备上启动失败。请尝试将 CPU 核心数设置为 1，或将后端切换至 QEMU。</string>
+    <string name="avf_boot_failed_switch_qemu">AVF 在此设备上无法启动。请将后端切换至 QEMU。</string>
+    <string name="avf_action_use_one_core">使用 1 个核心</string>
+    <string name="avf_action_switch_qemu">切换至 QEMU</string>
+    <string name="avf_action_retry">重试</string>
+    <string name="avf_net_workaround_failed">此设备上 AVF 联网所需的兼容性设置失败，Linux 系统启动后可能没有网络连接。如果网络不可用，请将后端切换至 QEMU。</string>
+
+    <!-- 启动镜像选择控件（§8.2） -->
+    <string name="boot_image_label">启动镜像</string>
+    <string name="boot_image_placeholder">选择系统镜像</string>
+    <string name="boot_image_checking">校验中</string>
+    <string name="boot_image_running_hint">请先停止虚拟机再切换镜像</string>
+    <string name="boot_image_empty_title">尚未安装系统镜像</string>
+    <string name="image_download_first">下载 debian.img</string>
+    <string name="image_import_entry">从文件导入 .img</string>
+    <string name="image_download_more">在线下载更多镜像…</string>
+    <string name="image_corrupt">已损坏</string>
+    <string name="image_list_load_failed">镜像列表加载失败。</string>
+    <string name="image_activated_next_boot">已激活，下次启动生效</string>
+    <string name="image_reverify">重新校验</string>
+    <string name="image_redownload">重新下载</string>
+    <string name="image_imported">已导入 %1$s</string>
+    <string name="image_verify_ok">校验通过</string>
+    <string name="image_verify_failed">校验失败——镜像已损坏</string>
+    <string name="image_err_not_an_image">不是 VMDroid .img——请用 Podroid-Debian tools/mkimg.sh 打包（见项目 README）。</string>
+    <string name="image_err_corrupt">镜像已损坏，请重新校验或重新下载。</string>
+    <string name="image_err_format">镜像格式过新，当前应用版本不支持。</string>
+    <string name="image_err_arch">镜像架构与本机不符。</string>
+    <string name="image_err_app_old">该镜像需要更新版本的应用。</string>
+    <string name="image_err_missing">镜像文件缺失，请重新导入。</string>
+    <string name="image_err_generic">镜像操作失败：%1$s</string>
+
+    <!-- 激活冲突对话框（§8.5） -->
+    <string name="reset_dialog_title">需要重置虚拟机数据</string>
+    <string name="reset_dialog_body">目标镜像与当前系统不同（%1$s → %2$s）。为保证可启动，需要清空虚拟机数据盘 storage.img。</string>
+    <string name="reset_dialog_deletes">将删除：容器数据、apt/apk 已装包、/root 内容</string>
+    <string name="reset_dialog_keeps">不会删除：已下载的系统镜像</string>
+    <string name="reset_confirm_switch">重置并切换</string>
+    <string name="reset_confirm_keep">切换（保留数据）</string>
+    <string name="reset_advanced_keep">高级：保留数据（可能导致系统无法启动）</string>
+
+    <!-- M4: 镜像下载通知（§6.2 / §8.3） -->
+    <string name="channel_download_name">系统镜像下载</string>
+    <string name="notif_download_title">正在下载 %1$s</string>
+    <string name="notif_download_progress">%1$d%% · %2$s</string>
+    <string name="notif_download_done">%1$s 下载完成</string>
+    <string name="notif_download_fail">%1$s 下载失败</string>
+
+    <!-- M4: 镜像管理页（§8.3） -->
+    <string name="images_title">系统镜像</string>
+    <string name="images_installed_section">已安装</string>
+    <string name="images_catalog_section">在线目录</string>
+    <string name="images_empty">尚未安装系统镜像</string>
+    <string name="images_set_active">设为启动镜像</string>
+    <string name="images_verify">校验</string>
+    <string name="images_verify_now">立即校验</string>
+    <string name="images_factory_reset">恢复出厂</string>
+    <string name="images_remove">移除</string>
+    <string name="images_status_active">使用中</string>
+    <string name="images_verifying">校验中…</string>
+    <string name="images_import">从文件导入 .img…</string>
+    <string name="images_refresh">刷新</string>
+    <string name="images_subscribe">订阅设置</string>
+    <string name="images_subscribe_hint">目录 URL（catalog.json）</string>
+    <string name="images_subscribe_save">保存</string>
+    <string name="images_download_retry">下载失败，点击重试</string>
+    <string name="images_wifi_only">仅 Wi-Fi</string>
+    <string name="images_catalog_empty">目录暂无可用镜像</string>
+    <string name="images_catalog_loading">正在获取镜像目录…</string>
+    <string name="images_catalog_error">获取镜像目录失败：%1$s</string>
+    <string name="images_catalog_malformed">镜像目录格式错误</string>
+    <string name="images_catalog_sig_invalid">镜像目录签名无效</string>
+    <string name="images_eta">剩 %1$s</string>
+    <string name="images_remove_confirm_title">移除镜像？</string>
+    <string name="images_remove_confirm_body">将删除 %1$s 及其校验记录。</string>
+    <string name="images_remove_active_warn">使用中的镜像也会被移除 —— 下次启动前需选择其他镜像。</string>
+    <string name="images_removed">已删除 %1$s</string>
+    <string name="images_factory_confirm_title">恢复出厂数据？</string>
+    <string name="images_factory_confirm_body">将清空虚拟机数据盘 storage.img（容器数据、已装包、/root 内容），下次启动自动重新格式化。</string>
+    <string name="images_factory_done">数据盘已清零，下次启动生效</string>
+    <string name="images_err_storage_full">存储空间不足，无法下载</string>
+    <string name="images_stop_vm_first">请先停止虚拟机</string>
+    <string name="settings_downloads_wifi_only">仅 Wi-Fi 下载</string>
+</resources>

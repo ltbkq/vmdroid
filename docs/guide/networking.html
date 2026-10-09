@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Networking &amp; port forwarding &middot; Podroid docs</title>
+  <meta name="description" content="How guest networking works in Podroid, implicit and user-defined port forwards, LAN reachability, and the privileged-port limit." />
+  <link rel="icon" type="image/png" href="../logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav>
+    <a class="nav-logo" href="../index.html"><img src="../logo.png" alt="Podroid" />Podroid</a>
+    <button class="menu-toggle" aria-label="Toggle menu">&#9776;</button>
+    <ul class="nav-links">
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="index.html" class="cta">Docs</a></li>
+      <li><a href="https://github.com/ExTV/Podroid">GitHub</a></li>
+    </ul>
+  </nav>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <h4>Getting started</h4>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="getting-started.html">Getting started</a></li>
+        <li><a href="how-it-works.html">How it works</a></li>
+      </ul>
+      <h4>Going deeper</h4>
+      <ul>
+        <li><a href="performance.html">Performance &amp; why it's slow</a></li>
+        <li><a href="backends.html">Backends: QEMU &amp; AVF</a></li>
+        <li><a href="networking.html" class="active">Networking &amp; ports</a></li>
+        <li><a href="packages.html">Packages &amp; services</a></li>
+        <li><a href="migrations.html">Updates &amp; migrations</a></li>
+        <li><a href="desktop.html">Desktops &amp; X11 viewer</a></li>
+        <li><a href="settings.html">Terminal &amp; settings</a></li>
+      </ul>
+      <h4>Reference</h4>
+      <ul>
+        <li><a href="limitations.html">Limitations &amp; troubleshooting</a></li>
+        <li><a href="use-cases.html">Use cases</a></li>
+      </ul>
+    </aside>
+
+    <main class="content">
+      <h1>Networking &amp; port forwarding</h1>
+      <p class="lead">The Alpine guest has full outbound internet access from first boot. Inbound access - SSH, VNC, container services - works through port forwarding, with a few rules injected automatically and the rest configured in Settings.</p>
+
+      <h2>Guest network: SLIRP user-mode</h2>
+      <p>On the QEMU backend the guest network is provided by <strong>SLIRP</strong>, a userspace TCP/IP stack embedded inside QEMU. No root, no kernel TUN/TAP device, and no host-side network interface are involved. From inside the guest the network looks like a small NAT:</p>
+
+      <table>
+        <thead>
+          <tr><th>Address</th><th>Role</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>10.0.2.15/24</code></td><td>Guest IP (eth0)</td></tr>
+          <tr><td><code>10.0.2.2</code></td><td>Default gateway (SLIRP host)</td></tr>
+          <tr><td><code>10.0.2.3</code></td><td>SLIRP's DNS forwarder - dead on Android, which has no host <code>/etc/resolv.conf</code> for it to read</td></tr>
+          <tr><td><code>8.8.8.8</code>, <code>1.1.1.1</code></td><td>Fallback DNS (in <code>/etc/resolv.conf</code>)</td></tr>
+        </tbody>
+      </table>
+
+      <p>IPv6 is disabled on the QEMU netdev (<code>ipv6=off</code>). Outbound TCP and UDP both work. The <code>podroid-network</code> OpenRC service brings up eth0 with these addresses at boot. Because SLIRP's own forwarder is dead, the guest's <code>/etc/resolv.conf</code> lists up to two distinct device resolvers in their original order (passed via <code>podroid.dns=</code>), then deduplicated <code>8.8.8.8</code> / <code>1.1.1.1</code> fallbacks. In airplane mode, or when no valid device resolver is available, the list preserves the fallback <code>10.0.2.3</code>, <code>8.8.8.8</code>, <code>1.1.1.1</code>.</p>
+
+      <div class="callout note">
+        <span class="label">AVF backend</span>
+        <p>On the AVF backend the guest receives its IP from Android's built-in tethering via DHCP (udhcpc), rather than a static SLIRP address. The default route and DNS are assigned by the Android network stack. Inbound connectivity still works through port forwarding as described below, but the transport is vsock rather than SLIRP hostfwd.</p>
+      </div>
+
+      <h2>Implicit port forwards</h2>
+      <p>Three port forwards are injected automatically every time the VM starts. They never appear in the port-forward UI and cannot be removed from there:</p>
+
+      <table>
+        <thead>
+          <tr><th>Service</th><th>Host port</th><th>Guest port</th><th>Protocol</th><th>When active</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>SSH (dropbear)</td>
+            <td><code>9922</code></td>
+            <td><code>22</code></td>
+            <td>TCP</td>
+            <td>When SSH is enabled in Settings</td>
+          </tr>
+          <tr>
+            <td>X11 / VNC (Xvnc)</td>
+            <td><code>5900</code></td>
+            <td><code>5900</code></td>
+            <td>TCP</td>
+            <td>Always (backs the in-app screen viewer)</td>
+          </tr>
+          <tr>
+            <td>PulseAudio</td>
+            <td><code>4713</code></td>
+            <td><code>4713</code></td>
+            <td>TCP</td>
+            <td>Always (backs the in-app audio stream)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The SSH forward is conditional: if you turn SSH off in Settings, the 9922&rarr;22 rule is not added and dropbear does not start inside the guest. The VNC and PulseAudio forwards are unconditional because the in-app X11 viewer depends on them.</p>
+
+      <h2>Adding your own rules</h2>
+      <p>Open <strong>Settings &rarr; Port forwards &rarr; Add</strong>. Enter a host port (on the Android device), a VM port (inside the guest), and pick TCP, UDP, or Both. On the QEMU backend rules apply live via the QMP protocol - no VM restart is needed. Rules are persisted across reboots. Next to Add there is also a <strong>Clean all</strong> button that removes every user rule at once, behind a confirmation dialog; the app's own SSH, display, and audio forwards are not affected.</p>
+
+      <p>A typical setup for a container service listening on guest port 8080:</p>
+
+      <pre><code><span class="c"># Inside the guest: start your service on port 8080</span>
+podman run -d -p 8080:80 nginx
+
+<span class="c"># In Settings -> Port forwards -> Add:
+#   Host port:  8080
+#   VM port:    8080
+#   Protocol:   TCP
+#
+# Then from your laptop on the same Wi-Fi:</span>
+curl http://&lt;phone-ip&gt;:8080</code></pre>
+
+      <h3>Limits on the rule list</h3>
+      <p>A host port that something else on the phone is already using cannot be forwarded. That rule alone fails and is retried whenever the list changes; the VM keeps running and every other rule is unaffected. Android hands out ports from 32768 upwards to ordinary apps, so a rule in that range is the most likely one to collide - pick host ports below it when you have the choice.</p>
+
+      <p>Up to 2048 rules can be saved. The limit exists because each rule is a listening socket and a row in Settings, and because a shell loop can otherwise add thousands of them in a second. <code>podroid-forward</code> reports an error rather than reporting success once the list is full.</p>
+
+      <h2>Talking back to Android from the guest</h2>
+      <p>Several command-line tools ship inside the VM so scripts and shell sessions can reach the Android side directly, without the in-app UI. They all work on the QEMU and AVF backends.</p>
+
+      <h3><code>podroid-forward</code> - manage port forwards from the shell</h3>
+      <pre><code><span class="c"># forward phone :8888 -&gt; guest :80</span>
+podroid-forward add 8888 80 tcp
+<span class="c"># shorthand for "add ... tcp"</span>
+podroid-forward 8888 80
+<span class="c"># list current rules</span>
+podroid-forward list
+<span class="c"># drop a rule</span>
+podroid-forward remove 8888 tcp
+<span class="c"># drop every user rule at once (replies "removed N")</span>
+podroid-forward clean</code></pre>
+      <p>Rules created this way are identical to ones added in Settings: they apply live, persist across reboots, and appear in the Settings list. Both TCP and UDP work on either backend. <code>clean</code> removes only user rules - the app's own SSH, display, and audio forwards are untouched.</p>
+
+      <h3><code>podroid-notify</code> - post an Android notification</h3>
+      <pre><code><span class="c"># simplest form</span>
+podroid-notify "build finished"
+<span class="c"># with a title and priority (low | normal | high)</span>
+podroid-notify --title Podroid --priority high "container crashed"
+<span class="c"># reuse --id to update the same notification in place</span>
+podroid-notify --id 7 "progress 50%"</code></pre>
+      <p>Handy for long builds, downloads, cron jobs and container health alerts. Tapping the notification opens Podroid. Requires the standard Android notification permission, requested at first run.</p>
+
+      <h3><code>podroid-open</code> - open a URL on the phone</h3>
+      <pre><code><span class="c"># open a link in the phone's default browser</span>
+podroid-open https://github.com/ExTV/Podroid</code></pre>
+      <p>Hands the URL to Android's <code>ACTION_VIEW</code> intent, so it opens in whatever app handles it on the phone. Only <code>http</code> and <code>https</code> URLs are accepted.</p>
+
+      <h3><code>podroid-power</code> - control the VM from inside the guest</h3>
+      <pre><code><span class="c"># stop the VM cleanly - the app returns to its stopped state</span>
+podroid-power stop
+<span class="c"># restart the VM</span>
+podroid-power restart
+<span class="c"># print the current VM state, e.g. Running</span>
+podroid-power status</code></pre>
+      <p>A clean lifecycle hook routed through the app, unlike an in-guest <code>poweroff</code> (which the app would treat as an unexpected exit). Useful for scripts that need to cycle the VM, or to shut it down from an SSH session.</p>
+
+      <h3><code>podroid-server</code> - server (headless) mode</h3>
+      <pre><code><span class="c"># turn server mode on - the screen goes black at minimum brightness</span>
+podroid-server on
+<span class="c"># turn it back off</span>
+podroid-server off
+<span class="c"># query state (on | off)</span>
+podroid-server status</code></pre>
+      <p>Server mode keeps the VM running behind a pure-black, minimum-brightness full-screen overlay - for leaving the phone on a headless workload with minimal OLED draw and burn-in. The screen stays on (so the system does not kill the VM) but shows nothing. Exit by <strong>holding the screen for three seconds</strong>, or run <code>podroid-server off</code>. The same toggle lives in the terminal's top bar. <code>podroid-headless</code> is an alias for <code>podroid-server</code>.</p>
+
+      <div class="callout note">
+        <span class="label">How it works</span>
+        <p>A small guest daemon (<code>podroid-hostd</code>) relays each request to the Android side over the same control transport the app already uses - a virtio-console port on QEMU, vsock on AVF - which then performs the requested action: post a notification, write a port-forward rule, open a URL, or control the VM. Any process that can reach the guest socket can use these, so they work from a container too if you bind-mount <code>/run/podroid-host.sock</code> into it.</p>
+      </div>
+
+      <h2>LAN reachability</h2>
+      <p>Port forwards you create, and the SSH forward, bind <code>0.0.0.0</code> rather than <code>127.0.0.1</code>. This means any device on the same Wi-Fi network can reach the phone by its local IP address. The phone's current IP is shown in <strong>Settings</strong>. The two implicit desktop forwards are the exception: VNC (5900) and audio (4713) bind loopback only, so the passwordless X session is never exposed to the network.</p>
+
+      <pre><code><span class="c"># SSH from a laptop on the same Wi-Fi</span>
+<span class="p">$</span> ssh root@&lt;phone-ip&gt; -p 9922
+<span class="c"># password: podroid</span>
+
+<span class="c"># VNC from any viewer</span>
+<span class="p">$</span> vncviewer &lt;phone-ip&gt;:5900
+
+<span class="c"># HTTP service forwarded to host port 8080</span>
+<span class="p">$</span> curl http://&lt;phone-ip&gt;:8080</code></pre>
+
+      <h2>The privileged-port limit</h2>
+      <p>Android apps run as unprivileged Linux users and do not hold <code>CAP_NET_BIND_SERVICE</code>. The Linux kernel refuses to bind a TCP or UDP socket to any port below 1024 for a process without that capability. This is a kernel-level rule, not a Podroid restriction, and there is no in-app workaround without root.</p>
+
+      <p>Consequences:</p>
+
+      <ul>
+        <li><strong>SSH is exposed on host port 9922, not 22.</strong> Port 22 is below 1024; 9922 is not.</li>
+        <li>You cannot listen on host ports <code>:80</code> or <code>:443</code> directly.</li>
+        <li>The Add-rule dialog accepts any value from 1 to 65535, but a host port below 1024 will fail to bind at VM start time with a bind error in the logs. The rule itself is accepted - the failure happens when QEMU or the vsock forwarder tries to open the socket.</li>
+      </ul>
+
+      <div class="callout warn">
+        <span class="label">Workaround</span>
+        <p>Forward to a high host port instead of the standard one: map host <code>8080</code> to guest <code>80</code>, and host <code>8443</code> to guest <code>443</code>. A daemon running as guest-root can still listen on 80 or 443. A <strong>rootless Podman or Docker</strong> container is the exception: its published port is also subject to the &ge;1024 limit inside the guest, so publish to a high guest port too - e.g. a Pi-hole DNS container on guest <code>5353/udp</code>, forwarded to host <code>5353</code>, with LAN clients pointed at <code>&lt;phone-ip&gt;:5353</code>.</p>
+      </div>
+
+      <pre><code><span class="c"># Forward a web server on guest :80 to a high host port</span>
+<span class="c"># Settings -> Port forwards -> Add:  8080 -> 80  TCP</span>
+
+<span class="c"># Then reach it from outside:</span>
+<span class="p">$</span> curl http://&lt;phone-ip&gt;:8080</code></pre>
+
+      <h2>Sharing files over the network</h2>
+      <p>Getting files in and out of the guest from another computer is a common first task, and which protocols can work is decided almost entirely by the privileged-port rule above. This section gives the one that works well, the one that works with a caveat, and the ones that cannot work at all, so you are not left testing them one by one.</p>
+
+      <h3>SFTP, the one to reach for first</h3>
+      <p>SSH is already running on host port <code>9922</code>, so file transfer needs no second service, no extra rule, and no setup at all: the guest ships the SFTP helper alongside dropbear. Turn SSH on in Settings and connect. Any SFTP client reaches <code>&lt;phone-ip&gt;</code> on port <code>9922</code> with the guest's own credentials. WinSCP and FileZilla both speak it, as does the command line:</p>
+
+      <pre><code><span class="p">$</span> sftp -P 9922 root@&lt;phone-ip&gt;</code></pre>
+
+      <p>It is encrypted, it needs one port instead of a range, and it goes through the rule the app already creates for you.</p>
+
+      <div class="callout note">
+        <span class="label">On an older VM image, one more line</span>
+        <p>The helper ships from v1.2.7 onwards. If <code>sftp</code> connects and then closes immediately, the image predates it: run <code>apk add openssh-sftp-server</code> in the guest once.</p>
+      </div>
+
+      <h3>FTP, when the client cannot do anything else</h3>
+      <p>Some old clients only speak FTP. It works, but passive mode needs care: the server tells the client which port to open for the data connection, so that port has to be forwarded too. Pin the passive range to a handful of ports rather than forwarding hundreds, and forward each one to the same number on both sides.</p>
+
+      <pre><code><span class="c"># inside the VM</span>
+<span class="p">#</span> apk add vsftpd
+
+<span class="c"># /etc/vsftpd/vsftpd.conf</span>
+listen=YES
+listen_ipv6=NO
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+chroot_local_user=YES
+allow_writeable_chroot=YES
+seccomp_sandbox=NO
+pasv_enable=YES
+pasv_min_port=42100
+pasv_max_port=42109
+pasv_address=&lt;phone-ip&gt;
+pasv_addr_resolve=NO
+
+<span class="p">#</span> rc-service vsftpd start
+<span class="p">#</span> rc-update add vsftpd</code></pre>
+
+      <p>Then add eleven forwards: host <code>2121</code> to VM <code>21</code> for the control connection (21 is privileged on the Android side, so it cannot be the host port), and <code>42100</code> through <code>42109</code> to the same numbers. Connect to <code>ftp://&lt;phone-ip&gt;:2121</code>.</p>
+
+      <div class="callout warn">
+        <span class="label">Why it works in FileZilla but not in Windows Explorer</span>
+        <p>Modern clients use the extended passive command, which returns only a port and reuses the address they are already connected to, so they work whether or not <code>pasv_address</code> is set. Windows Explorer uses the older command, which returns an address as well, and the guest fills that in with its internal address <code>10.0.2.15</code>. The client then tries to open the data connection to an address that does not exist on your network and hangs, usually after the directory listing appears to start. Setting <code>pasv_address</code> to the phone's own address is what fixes it. The phone's address changes when it moves between networks, so it has to be updated to match; the <strong>Status</strong> screen lists every address the phone currently has.</p>
+      </div>
+
+      <h3>NFS and iSCSI</h3>
+      <p>The kernel ships an NFSv4 server and client, so the guest can serve NFS - with one constraint. The export must live on an ext4-backed path such as <code>/mnt/persist</code> and be exported with <code>fsid=0</code>, because the overlay root cannot produce NFS filehandles by design. Note that Windows' own NFS client speaks version 3, which also needs the portmapper on port 111 - privileged, so Windows still cannot reach it. The kernel also ships the LIO iSCSI target (<code>targetcli</code>, with fileio and iblock backstores) and the TCP initiator.</p>
+
+      <h3>What cannot work</h3>
+      <p>These are not missing features, they are consequences of running as an ordinary app on a stock phone:</p>
+
+      <ul>
+        <li><strong>SMB or Windows file sharing from the guest.</strong> Windows only speaks SMB on port 445, and an unprivileged app cannot bind any port below 1024. A Samba server inside the guest will start, but no Windows machine can be pointed at it on a different port.</li>
+        <li><strong>Mounting a Windows share inside the guest.</strong> The kernel is built without <code>cifs</code>, so there is no client side either.</li>
+        <li><strong>Serving DNS or PXE to other machines on the network.</strong> DNS is port 53, DHCP is 67 and 68, TFTP is 69: all privileged, and Android owns DHCP on a tethered network regardless.</li>
+      </ul>
+
+      <p>Where a protocol is blocked only by the port number, the same workaround as elsewhere applies: run it on a high port and point clients at that port. It works for anything whose client lets you choose the port, which rules out Windows file sharing but not much else.</p>
+
+      <h2>Port forwarding on AVF</h2>
+      <p>On the AVF backend, port forwarding is implemented over <strong>vsock</strong> rather than SLIRP hostfwd. Each rule creates a listener on <code>0.0.0.0:hostPort</code> on the Android side, which is bridged to a vsock port on the guest via the <code>podroid-vsock-agent</code> service. The privileged-port limit applies here too, for the same reason.</p>
+
+      <div class="callout note">
+        <span class="label">UDP on AVF</span>
+        <p>UDP forwarding works on both backends. Because vsock is a stream transport, each inbound UDP datagram is length-framed and carried over a per-client vsock connection, then delivered to the guest as a real UDP datagram - so a guest DNS server such as Pi-hole is reachable over UDP. Idle flows are reaped automatically, and the number of concurrent client flows is capped to bound resource use.</p>
+        <p>The privileged-port limit applies at both ends: an unprivileged Android app can't bind a host port below 1024, and rootless Podman can't publish a privileged port inside the guest either. So run a DNS server like Pi-hole on a high port - for example host <code>5353/udp</code> to guest <code>5353/udp</code> - and point clients at <code>&lt;phone-ip&gt;:5353</code>.</p>
+      </div>
+
+      <div class="pagenav">
+        <a class="prev" href="backends.html"><span class="dir">Previous</span>&larr; Backends: QEMU &amp; AVF</a>
+        <a class="next" href="packages.html"><span class="dir">Next</span>Packages &amp; services &rarr;</a>
+      </div>
+      <p class="docfoot">Podroid is free software (GPL). Docs for v1.2.9. Found something inaccurate? <a href="https://github.com/ExTV/Podroid/issues">Open an issue</a>.</p>
+    </main>
+  </div>
+
+  <script>
+    document.querySelector('.menu-toggle').addEventListener('click', function () {
+      document.querySelector('.sidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

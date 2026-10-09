@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="Podroid terminal resize daemon (hvc1 → stty hvc0)"
+command="/usr/local/bin/podroid-resize"
+command_background="yes"
+pidfile="/run/podroid-resize.pid"
+
+depend() {
+    need podroid-bootstrap
+    before podroid-ready
+}

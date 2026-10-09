@@ -1,0 +1,122 @@
+package io.github.ltbkq.vmdroid
+
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.ltbkq.vmdroid.data.repository.LanguageManager
+import io.github.ltbkq.vmdroid.service.VmdroidService
+import io.github.ltbkq.vmdroid.service.VmControlReceiver
+import io.github.ltbkq.vmdroid.ui.navigation.NavGraphViewModel
+import io.github.ltbkq.vmdroid.ui.navigation.VmdroidNavGraph
+import io.github.ltbkq.vmdroid.ui.theme.VmdroidTheme
+import dagger.hilt.android.AndroidEntryPoint
+
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+
+    override fun attachBaseContext(newBase: Context?) {
+        val base = newBase ?: return super.attachBaseContext(null)
+        val savedLang = LanguageManager.getSavedLanguage(base)
+        super.attachBaseContext(LanguageManager.wrapContextForLocale(base, savedLang))
+    }
+
+    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) {
+            handleVmControlIntent(intent)
+        }
+        setContent {
+            val windowSizeClass = calculateWindowSizeClass(this)
+            val navVm: NavGraphViewModel = hiltViewModel()
+            val headlessVm: io.github.ltbkq.vmdroid.ui.HeadlessViewModel = hiltViewModel()
+            val darkTheme by navVm.darkTheme.collectAsStateWithLifecycle(initialValue = null)
+            val dynamicColor by navVm.dynamicColorEnabled.collectAsStateWithLifecycle(initialValue = false)
+            val headlessActive by headlessVm.active.collectAsStateWithLifecycle()
+
+            // Server mode: near-zero window brightness + keep the screen on so the
+            // app stays foreground (the VM is never backgrounded -> never killed).
+            androidx.compose.runtime.LaunchedEffect(headlessActive) {
+                val lp = window.attributes
+                val bars = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                val systemBars = androidx.core.view.WindowInsetsCompat.Type.systemBars()
+                if (headlessActive) {
+                    lp.screenBrightness = 0.004f
+                    window.attributes = lp
+                    window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    // The soft keyboard is a separate window above the overlay, so
+                    // it stays visible (and interactive) over a black server-mode
+                    // screen when entered from the terminal. Clear the focused
+                    // editor and dismiss the IME so the screen is truly black.
+                    window.currentFocus?.clearFocus()
+                    (getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                        as? android.view.inputmethod.InputMethodManager)
+                        ?.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+                    // Go fully immersive: hide the status + navigation bars so no
+                    // pixels stay lit (OLED burn-in risk on an always-on server
+                    // screen). A swipe reveals them transiently. Matches X11.
+                    bars.hide(systemBars)
+                    bars.systemBarsBehavior =
+                        androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    window.attributes = lp
+                    window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    bars.show(systemBars)
+                }
+            }
+
+            VmdroidTheme(darkTheme = darkTheme, dynamicColor = dynamicColor) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                ) {
+                    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+                        VmdroidNavGraph(windowSizeClass = windowSizeClass)
+                        if (headlessActive) {
+                            io.github.ltbkq.vmdroid.ui.components.HeadlessOverlay(onExit = { headlessVm.disable() })
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleVmControlIntent(intent)
+    }
+
+    /**
+     * Foreground-launch path for automation: a cold background receiver may
+     * be denied a foreground-service start, but an Activity launch is always
+     * foreground, so this route is reliable on both cold start (onCreate,
+     * only when there is no saved state to restore) and warm delivery
+     * (onNewIntent).
+     *
+     * STOP_VM 挂在 manifest 的同一个 intent-filter 里与 START_VM 对称
+     * （FIXLIST ISSUE-12）：此前 Activity 只处理 START，`am start -a ...STOP_VM`
+     * 会被 onNewIntent **静默吞掉**，QEMU 继续运行而调用方以为已停机。
+     */
+    private fun handleVmControlIntent(intent: Intent?) {
+        when (intent?.action) {
+            VmControlReceiver.ACTION_START_VM -> VmdroidService.start(this)
+            VmControlReceiver.ACTION_STOP_VM -> VmdroidService.stop(this)
+            else -> Unit
+        }
+    }
+}

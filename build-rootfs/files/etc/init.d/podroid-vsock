@@ -1,0 +1,53 @@
+#!/sbin/openrc-run
+description="Podroid vsock control + port forwarding agent (AVF only)"
+pidfile="/run/podroid-vsock-agent.pid"
+
+depend() {
+    need podroid-bootstrap
+    before podroid-ready
+}
+
+start() {
+    # AVF-only: QEMU's kernel has no AF_VSOCK, so the agent would just fail to
+    # bind. Skip cleanly via mark_service_inactive — that's OpenRC's idiom for
+    # "this service intentionally didn't start" and produces a one-line
+    # "skipping" message instead of "* ERROR: <svc> failed to start" (which
+    # is what `start_pre` returning non-zero would yield).
+    if ! grep -q 'podroid\.backend=avf' /proc/cmdline 2>/dev/null; then
+        einfo "Not an AVF boot — skipping podroid-vsock"
+        mark_service_inactive
+        return 0
+    fi
+    ebegin "Starting podroid-vsock-agent"
+    start-stop-daemon --start --background \
+        --make-pidfile --pidfile "$pidfile" \
+        --stdout /var/log/podroid-vsock-agent.log \
+        --stderr /var/log/podroid-vsock-agent.log \
+        --exec /usr/local/bin/podroid-vsock-agent
+    _agent_rc=$?
+    # --background returns 0 the instant the child forks, even if the agent
+    # exits immediately (e.g. AF_VSOCK bind failure). Poll the pidfile's PID:
+    # a healthy agent breaks out on the first ~0.1s tick; a crash-on-launch
+    # misses every tick and the final kill -0 flips the rc.
+    if [ "$_agent_rc" -eq 0 ]; then
+        _agent_pid=$(cat "$pidfile" 2>/dev/null)
+        _i=0
+        while [ "$_i" -lt 10 ]; do
+            sleep 0.1
+            kill -0 "$_agent_pid" 2>/dev/null && break
+            _i=$((_i + 1))
+        done
+        kill -0 "$_agent_pid" 2>/dev/null || _agent_rc=1
+    fi
+    [ "$_agent_rc" -eq 0 ] || ewarn "podroid-vsock-agent failed to start (see /var/log/podroid-vsock-agent.log)"
+    eend "$_agent_rc"
+}
+
+stop() {
+    if [ -f "$pidfile" ]; then
+        ebegin "Stopping podroid-vsock-agent"
+        start-stop-daemon --stop --pidfile "$pidfile"
+        rm -f "$pidfile"
+        eend $?
+    fi
+}
