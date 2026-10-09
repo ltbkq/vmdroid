@@ -42,6 +42,16 @@
    guest 端口 22，宿主 9922。
 4. 不想装机先验镜像：Linux PC 上 `tools/pc-run.sh <img>` 一条命令进 `Ready!`。
 
+## 界面截图
+
+| 系统镜像页 | Home 页（启动镜像选择） |
+|---|---|
+| ![系统镜像页：激活 Ubuntu 24.04 + 在线目录下载](docs/screenshots/05-images-page.jpg) | ![Home 页：启动镜像选择控件与 Start VM](docs/screenshots/06-home-boot-image.jpg) |
+
+| 设置（虚拟机资源） | 状态监控 |
+|---|---|
+| ![设置页：深色主题 / 语言 / 内存与 CPU 核心数](docs/screenshots/07-settings-vm-resources.jpg) | ![状态监控：手机资源与虚拟机状态、后端、IP](docs/screenshots/08-status-monitor.jpg) |
+
 ## 已发布系统镜像（Release `system-images-2026.10.08`）
 
 | `image_id` | 资产 | 体积 | 包管理 | 内置开发工具 | PC `Ready!` |

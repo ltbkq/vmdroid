@@ -38,6 +38,16 @@ testing & fixes: [docs/TESTPLAN-system-images.md](docs/TESTPLAN-system-images.md
    `root` / `123`, `ltbkq` / `123` (passwordless sudo); guest port 22, host 9922.
 4. Verify an image without installing: on a Linux PC `tools/pc-run.sh <img>` reaches `Ready!` in one command.
 
+## Screenshots
+
+| Images page | Home (boot-image selector) |
+|---|---|
+| ![Images page: active Ubuntu 24.04 + online catalog](docs/screenshots/05-images-page.jpg) | ![Home: boot-image selector and Start VM](docs/screenshots/06-home-boot-image.jpg) |
+
+| Settings (VM resources) | Status monitor |
+|---|---|
+| ![Settings: dark theme / language / RAM & CPU cores](docs/screenshots/07-settings-vm-resources.jpg) | ![Status monitor: phone resources, VM state, backend, IPs](docs/screenshots/08-status-monitor.jpg) |
+
 ## Published system images (release `system-images-2026.10.08`)
 
 | `image_id` | Asset | Size | Package mgmt | Dev toolchain | PC `Ready!` |
