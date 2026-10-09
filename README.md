@@ -42,11 +42,11 @@
 
 | `image_id` | 资产 | 体积 | 包管理 | 内置开发工具 | PC `Ready!` |
 |---|---|---|---|---|---|
-| `alpine-3.24-arm64` | `alpine-minimal.img` | 184,557,568 B | apk | — | 29.7s |
-| `ubuntu-noble-arm64` | `ubuntu-minimal.img` | 238,034,944 B | apt/dpkg | — | 55.3s |
-| `debian-minimal-arm64` | `debian-arm64-build1225.img` | 472,915,968 B | apt/dpkg | gcc/g++/make/git | 83.0s |
-| `fedora-44-arm64` | `fedora-minimal.img` | 381,689,856 B | dnf/rpm | gcc/g++/make/git | 146.8s |
-| `arch-rolling-arm64` | `arch-minimal.img` | 543,170,560 B | pacman | — | 67.9s |
+| `alpine-3.24-arm64` | [`alpine-minimal.img`](https://github.com/ltbkq/vmdroid/releases/download/system-images-2026.10.08/alpine-minimal.img) | 184,557,568 B | apk | — | 29.7s |
+| `ubuntu-noble-arm64` | [`ubuntu-minimal.img`](https://github.com/ltbkq/vmdroid/releases/download/system-images-2026.10.08/ubuntu-minimal.img) | 238,034,944 B | apt/dpkg | — | 55.3s |
+| `debian-minimal-arm64` | [`debian-arm64-build1225.img`](https://github.com/ltbkq/vmdroid/releases/download/system-images-2026.10.08/debian-arm64-build1225.img) | 472,915,968 B | apt/dpkg | gcc/g++/make/git | 83.0s |
+| `fedora-44-arm64` | [`fedora-minimal.img`](https://github.com/ltbkq/vmdroid/releases/download/system-images-2026.10.08/fedora-minimal.img) | 381,689,856 B | dnf/rpm | gcc/g++/make/git | 146.8s |
+| `arch-rolling-arm64` | [`arch-minimal.img`](https://github.com/ltbkq/vmdroid/releases/download/system-images-2026.10.08/arch-minimal.img) | 543,170,560 B | pacman | — | 67.9s |
 
 > 时间为 PC（`qemu-system-aarch64`）实测到 `Ready!`；五个镜像的 PC 冒烟、SSH 登录与契约标记全部通过。
 
