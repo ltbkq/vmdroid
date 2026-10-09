@@ -1,4 +1,4 @@
-# VMDroid
+# VMDroid   (default password: 123)
 
 **An Android VM with the software and the OS separated** — the VM is a standalone app,
 the system is a swappable `.img` file.
