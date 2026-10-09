@@ -189,3 +189,11 @@ L2 目录条目=☐  L3 激活=☐ 启动=☐ 切换保留=☐ 删除=☐
 **全部通过** → 允许推送仓库并发布 `v1.3.0`。
 遗留（非阻断）：ISSUE-03 为环境限制（策略已定）；ISSUE-06 为代码级修复，未单列自动化用例；
 ISSUE-09 经评估保持现状（已文档澄清）。
+
+
+### 6.5 发布记录（2026-10-09）
+
+- **代码**：`ltbkq/vmdroid` 分支 `app` → `bf229e5`（21 文件 / +672）已推送
+- **APK Release**：`v1.3.0`（`--target app`，assets = `vmdroid-1.3.0-debug.apk` 47,484,185 B + `SHA256SUMS`），已成 **latest**（应用内更新检查跟随）
+- **镜像 Release** `system-images-2026.10.08`：新增 `catalog.json`(3057 B) + `catalog.json.sig`(96 B)；APK 资产由 1.2.9 更新为 **1.3.0**；`sha256sums.txt` 重算（5 镜像 + APK）；Release 说明同步（catalog 段 + 1.3.0 行）
+- **一致性校验**：远端 `sha256sums.txt`、`catalog.json` 与本地逐字节一致；本地 5 镜像 sha 与 sums 吻合 ✓
