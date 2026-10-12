@@ -34,13 +34,17 @@
 
 ## 快速开始
 
-1. 装 APK：Release [`v1.3.0`](https://github.com/ltbkq/vmdroid/releases/tag/v1.3.0) → `vmdroid-1.3.0-debug.apk`
-   （包名 `io.github.ltbkq.vmdroid.debug`，`versionCode 34`，内置 QEMU 11.0.4）。
-2. 打开应用的 **镜像页**：目录自动列出下方 5 个镜像（`catalog.json` + `catalog.json.sig`，
-   **ECDSA P-256 验签，失败即拒载**）→ 下载或「从文件导入 `.img`」→ 一键激活。
-3. **Start VM** → 等 `Ready!` → 用内置终端或 SSH：`root` / `123`、`ltbkq` / `123`（免密 sudo）；
-   guest 端口 22，宿主 9922。
-4. 不想装机先验镜像：Linux PC 上 `tools/pc-run.sh <img>` 一条命令进 `Ready!`。
+1. 装 APK：Release [`v2.0.0`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.0) →
+   `vmdroid-2.0.0-debug.apk`（`versionCode 35`，`versionName 2.0.0-debug`，内置 QEMU 11.0.4；
+   **从 v1.3.0 覆盖安装即升级**，应用内也会自动检查更新并静默下载新包 → 一键安装）。
+2. 打开应用的 **镜像页**：目录自动列出下方 5 个 **v2 镜像**（`catalog.json` + `catalog.json.sig`，
+   **ECDSA P-256 验签，失败即拒载**）→ 下载（`.img.zst` 应用内自动解压为稀疏 `.img`）或
+   「从文件导入 `.img`」→ 一键激活。v1 旧格式镜像会被标记「旧格式」并拒绝启动，可一键清理。
+3. **Start VM** → Home 实时日志可见 引导全过程（UEFI→GRUB→内核→initramfs）→ 等 `Ready!` →
+   内置终端或 SSH：`root` / `123`、`ltbkq` / `123`（免密 sudo）；guest 端口 22，宿主 9922。
+4. 不想装机先验镜像（Linux PC）：`zstd -dc <id>.img.zst > disk.img` 后
+   `qemu-system-aarch64 -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd -M virt -m 2048
+   -drive if=virtio,file=storage.img -drive if=virtio,file=disk.img`（数据盘可为新空文件，首启自动建）。
 
 ## 界面截图
 
@@ -52,7 +56,26 @@
 |---|---|
 | ![设置页：深色主题 / 语言 / 内存与 CPU 核心数](docs/screenshots/07-settings-vm-resources.jpg) | ![状态监控：手机资源与虚拟机状态、后端、IP](docs/screenshots/08-status-monitor.jpg) |
 
-## 已发布系统镜像（Release `system-images-2026.10.08`）
+## 已发布系统镜像 v2（Release [`system-images-v2-2026.10.12`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12)，**prerelease**）
+
+**v2 完整磁盘镜像**（GPT + UEFI/GRUB + 可写 ext4 根分区），分发 `.img.zst`；
+v2.0.0 应用的默认目录即指向本 Release（应用内下载后自动解压为稀疏 `.img`）。
+
+| `image_id` | 资产 | 体积（`.img.zst`） | 包管理 | PC `Ready!` |
+|---|---|---|---|---|
+| `alpine-3.24-arm64` | [`alpine-3.24-arm64.img.zst`](https://github.com/ltbkq/vmdroid/releases/download/system-images-v2-2026.10.12/alpine-3.24-arm64.img.zst) | 162,034,642 B | apk | 41.1s |
+| `ubuntu-noble-arm64` | [`ubuntu-noble-arm64.img.zst`](https://github.com/ltbkq/vmdroid/releases/download/system-images-v2-2026.10.12/ubuntu-noble-arm64.img.zst) | 206,453,636 B | apt/dpkg | 54.7s |
+| `debian-minimal-arm64` | [`debian-minimal-arm64.img.zst`](https://github.com/ltbkq/vmdroid/releases/download/system-images-v2-2026.10.12/debian-minimal-arm64.img.zst) | 397,743,991 B | apt/dpkg | 84.4s |
+| `fedora-44-arm64` | [`fedora-44-arm64.img.zst`](https://github.com/ltbkq/vmdroid/releases/download/system-images-v2-2026.10.12/fedora-44-arm64.img.zst) | 317,477,090 B | dnf/rpm | 173.4s |
+| `arch-rolling-arm64` | [`arch-rolling-arm64.img.zst`](https://github.com/ltbkq/vmdroid/releases/download/system-images-v2-2026.10.12/arch-rolling-arm64.img.zst) | 442,475,441 B | pacman | 92.4s |
+
+> 时间为 PC（`qemu-system-aarch64 -bios` UEFI，TCG）实测到 `Ready!`；五品类测试全过：
+> 结构全量校验（`--verify --full`）· UEFI 引导 · 属主/setuid/file-cap 保真抽检 · Ready 全链。
+> 同 Release 附 `catalog.json` + `catalog.json.sig`（schema 2）。账户/端口/验收口径与下表 v1 一致。
+> 构建与发布链：`distro-build/{build-v2-release,test-v2-release,publish-v2}.sh` +
+> `vmdroid-app/build-tools/mkdisk.sh`（v1 工具链已废弃）。
+
+## 已发布系统镜像 v1（Release [`system-images-2026.10.08`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08)，**旧格式——v2.0.0 应用已停止支持**）
 
 | `image_id` | 资产 | 体积 | 包管理 | 内置开发工具 | PC `Ready!` |
 |---|---|---|---|---|---|
@@ -94,10 +117,14 @@ UEFI 引导（GRUB/ESP）+ **可写 ext4 根分区** + raw 元数据分区（`VM
 
 - 文档：设计 `docs/DESIGN-disk-image-v2.md` 与规格 `docs/IMAGE-FORMAT-v2.md`（**均已冻结**）·
   测试计划 `docs/TESTPLAN-disk-image-v2.md` · 实测记录 `docs/spikes/M0-runbook.md`
+- **APK 已上架**：Release [`v2.0.0`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.0)
+  （`vmdroid-2.0.0-debug.apk` + `SHA256SUMS`；**含应用自动更新**：自动检查→静默下载→一键安装）
 - **镜像已上架**：Release [`system-images-v2-2026.10.12`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12)（prerelease，7 资产：五品类 `.img.zst` + schema2 `catalog.json` + 签名；应用默认目录已指向该 tag）
-- 绿线：格式四方对账 25/25 · 应用单测 450/0 · v1 selftest 56/0（兼容不倒退）· v2 selftest 34/0 ·
-  M2 QEMU 四轮 25/25（扩容 R7 meta 回写 → `VERIFY_OK`）· **五品类 L1–L4 全过（Ready! 5/5）** · APK 出包
-- 待办：真机（QEMU/AVF）验证与 P0-1 探测 · **APK 2.0.0 发版** · 真机 W^X 复测（`bin/zstd` 已入库）
+- 绿线：格式四方对账 25/25 · 应用单测 **487/0**（含自动更新 +37）· v1 selftest 56/0（兼容不倒退）·
+  v2 selftest 34/0 · M2 QEMU 四轮 25/25（扩容 R7 meta 回写 → `VERIFY_OK`）·
+  **五品类 L1–L4 全过（Ready! 41.1–173.4s）** · 远端三重对账（catalog 验签 / `image_sha256` / 资产↔目录 sha）
+- 待办：真机（QEMU/AVF）验证与 P0-1 探测 · 真机 W^X 复测（`bin/zstd` 已入库）·
+  TBD-1 方案 b 细节实现（`user.cfg` 已定稿于规格 §2.4）· Podroid-Debian 远程删除（待授权码）
 - 旧格式镜像在 v2 应用里会被 `LEGACY_FORMAT` 拒绝并提示重新获取（硬切换，无双栈）
 
 ## 构建与测试
@@ -158,10 +185,11 @@ local-test.sh           本地「构建 → 装机 → 启动 → 取证」脚�
 | — | **v2 迭代（2026-10-12 起，详见上文专节）** | |
 | M0-v2 | 设计评审（R5）+ P0 spikes（UEFI 链六轮/固件选型/参数通道/时延分档 D10） | ✅ 完成（P0-1/P0-4 待设备与真实构建） |
 | M1-v2 | 格式冻结 + `mkdisk.sh` + 夹具 25 + Kotlin codec 四方对账 + 打包/目录管线 v2 | ✅ 完成 |
-| M2-v2 | `init-podroid v2`（PARTUUID/挂载/扩容+R7 回写）+ QEMU 四轮 25/25 | ✅ 完成（真 rootfs ready 冒烟待 sudo） |
-| M3-v2 | Store/目录/下载/双引擎/启动可视化 切 v2（v1 兼容共存） | ✅ 主体完成（TBD-1 方案 b、缓存清理 UI 待做） |
-| M4-v2 | 发布迁移：真机验证 + catalog schema2 上架 + 文档/guide 全量同步 | ⏳ 待设备/发布窗口 |
+| M2-v2 | `init-podroid v2`（PARTUUID/挂载/扩容+R7 回写）+ QEMU 四轮 25/25 | ✅ 完成（含真 rootfs ready 冒烟 5/5） |
+| M3-v2 | Store/目录/下载/双引擎/启动可视化 切 v2（v1 兼容共存）+ 四项收尾 UI + R8 user.cfg 通道 | ✅ 完成 |
+| M4-v2 | 发布迁移：五品类构建/测试/catalog schema2/上架 + 文档/guide 同步 | ✅ 完成（镜像与 APK 均已上架；真机验证 ⏳ 待设备） |
+| M5-v2 | 应用自动更新（静默下载 + 一键安装，487/0） | ✅ 完成（随 `v2.0.0` 上架） |
 | M6 | 真机双后端矩阵回归 + 诊断 UI + 全站四态审计 | 🔄 进行中（本地回归套件全绿，真机矩阵待跑） |
-| M7 | Release、签名、catalog + `.sig`、文档 | ✅ 基本完成（`v1.3.0` 已发布；CI 待补） |
+| M7 | Release、签名、catalog + `.sig`、文档 | ✅ 完成（`v1.3.0` 与 **`v2.0.0`** 均已发布；v2 镜像 Release 亦已上架；CI 待补） |
 
 详见 [docs/DESIGN.md §14](docs/DESIGN.md)。
