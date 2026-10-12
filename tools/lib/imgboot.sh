@@ -3,7 +3,7 @@
 #
 # 归属（DESIGN §11.2）：vmdroid 仓库 `tools/lib/imgboot.sh`，被两处 source：
 #   1) vmdroid 仓库            tools/pc-run.sh           （用户入口，DESIGN §11.4 / R-16）
-#   2) Podroid-Debian 仓库     tools/pc-boot-smoke.sh    （CI 冒烟，同一实现不复制两份）
+#   2) Podroid-Debian 仓库     tools/pc-boot-smoke.sh    （v1 CI 冒烟；Podroid-Debian 仓库已废弃，v2 见 build-tools/pc-boot-smoke-v2.sh）
 # 提取与启动逻辑单一来源，任何一侧改动必须保持下述接口不变。
 #
 # ===================== 冻结接口（工位 A 依赖，原文如下） =====================
@@ -154,7 +154,7 @@ def parse(path):
         head = f.read(4)
         f.close()
         if head == b"hsqs":
-            reject("裸 squashfs（缺 footer）——请用 Podroid-Debian/tools/mkimg.sh 封装为 .img")
+            reject("裸 squashfs（缺 footer）——请用 build-tools/mkdisk.sh 封装为 .img")
         reject("非 VMDroid 系统镜像: footer 双 magic 不符")
     # 2) file_size（截断/拼接检测）
     file_size = u64(ft, 16)

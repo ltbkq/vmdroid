@@ -72,7 +72,12 @@ tools/pc-run.sh --smoke --timeout 90 debian.img  # 启动 → 等 Ready! → SSH
 
 ## 3. 共享库接口（**冻结**，工位 A 集成契约）
 
-`Podroid-Debian/tools/pc-boot-smoke.sh` 用法：
+> **注（2026-10-12）**：v1 冒烟器 `Podroid-Debian/tools/pc-boot-smoke.sh` 随
+> Podroid-Debian 远程仓库删除而废弃（本地副本或仍存在）；**v2 用
+> `build-tools/pc-boot-smoke-v2.sh`**（双盘 UEFI 拓扑，`--stage bootchain|ready`）。
+> 下述 v1 共享库接口契约仍适用于 `tools/lib/imgboot.sh` 本体。
+
+`Podroid-Debian/tools/pc-boot-smoke.sh`（已废弃）用法：
 
 ```sh
 REPO_VMDROID=/path/to/vmdroid

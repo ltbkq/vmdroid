@@ -38,6 +38,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -62,6 +64,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -143,6 +147,49 @@ fun ImagesScreen(
             },
             dismissButton = {
                 TextButton(onClick = viewModel::cancelFactoryReset) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    // §6.4 缓存清理二次确认（破坏性：= 放弃离线重装能力，文案必须明示）
+    state.cacheDeletePromptId?.let { id ->
+        AlertDialog(
+            onDismissRequest = viewModel::cancelCacheDelete,
+            title = { Text(stringResource(R.string.images_cache_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.images_cache_delete_confirm_body, id)) },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmCacheDelete) {
+                    Text(
+                        text = stringResource(R.string.images_cache_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelCacheDelete) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    if (state.cacheDeleteAllPrompt) {
+        AlertDialog(
+            onDismissRequest = viewModel::cancelCacheDeleteAll,
+            title = { Text(stringResource(R.string.images_cache_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.images_cache_delete_all_confirm_body)) },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmCacheDeleteAll) {
+                    Text(
+                        text = stringResource(R.string.images_cache_delete_all),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelCacheDeleteAll) {
                     Text(stringResource(R.string.cancel))
                 }
             },
@@ -329,6 +376,71 @@ fun ImagesScreen(
 
                 HorizontalDivider()
 
+                // ── 安装包缓存（§6.4：离线重装的取处，可清理） ─────────────
+                VmdroidSectionLabel(stringResource(R.string.images_cache_section))
+                Text(
+                    text = stringResource(R.string.images_cache_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                when {
+                    state.cacheLoading && state.cacheArchives.isEmpty() -> {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.XS),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Text(
+                                text = stringResource(R.string.images_cache_scanning),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    state.cacheArchives.isEmpty() -> {
+                        Text(
+                            text = stringResource(R.string.images_cache_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    else -> {
+                        // 总占用（st_blocks×512 真实占用口径）+ 全部清理
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    R.string.images_cache_total,
+                                    formatBytes(state.cacheTotalDiskBytes),
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = viewModel::promptCacheDeleteAll) {
+                                Text(
+                                    text = stringResource(R.string.images_cache_delete_all),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                        state.cacheArchives.forEach { entry ->
+                            CacheRow(
+                                row = entry,
+                                deleting = entry.imageId in state.deletingCacheIds,
+                                onDelete = { viewModel.promptCacheDelete(entry.imageId) },
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
                 // ── 在线目录（行） ─────────────────────────────────
                 VmdroidSectionLabel(stringResource(R.string.images_catalog_section))
 
@@ -506,6 +618,43 @@ private fun InstalledImageCard(
                 }
             }
 
+            // ③b 格式/状态徽标（§10 旧格式=红色 · §5.4 dirty=琥珀色；仍走颜色+图标+文字三重编码）
+            if (row.legacy || row.dirty) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.XS),
+                    verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.XS),
+                ) {
+                    if (row.legacy) {
+                        StatusBadge(
+                            text = stringResource(R.string.images_legacy_badge),
+                            color = MaterialTheme.colorScheme.error,
+                            icon = Icons.Default.Warning,
+                        )
+                    }
+                    if (row.dirty) {
+                        StatusBadge(
+                            text = stringResource(R.string.images_dirty_badge),
+                            color = MaterialTheme.colorScheme.tertiary,
+                            icon = Icons.Default.Info,
+                        )
+                    }
+                }
+                if (row.legacy) {
+                    Text(
+                        text = stringResource(R.string.images_legacy_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (row.dirty) {
+                    Text(
+                        text = stringResource(R.string.images_dirty_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            }
+
             // 校验中：20dp 进度圈 + 文字「校验中」，控件禁用
             if (verifying) {
                 Row(
@@ -567,6 +716,16 @@ private fun InstalledImageCard(
                     TextButton(onClick = onRemove, enabled = !cardBusy) {
                         Text(
                             text = stringResource(R.string.images_remove),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+
+                // §10 v1 旧格式：一键「清理旧镜像」（走既有删除 API + 二次确认）
+                if (row.legacy) {
+                    TextButton(onClick = onRemove, enabled = !cardBusy) {
+                        Text(
+                            text = stringResource(R.string.images_legacy_remove),
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
@@ -723,6 +882,70 @@ private fun RemoveConfirmDialog(
             }
         },
     )
+}
+
+// ---------------------------------------------------------------- 徽标 / 缓存行
+
+/** ③b 徽标小件（颜色 + 图标 + 文字三重编码，与状态行同规范）。 */
+@Composable
+private fun StatusBadge(
+    text: String,
+    color: Color,
+    icon: ImageVector,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.XS),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+        )
+    }
+}
+
+/** §6.4 缓存行：`<id>.img.zst` + 实际占用/表观大小，右侧删除图标按钮（二次确认）。 */
+@Composable
+private fun CacheRow(
+    row: CacheRowUi,
+    deleting: Boolean,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.XS),
+        ) {
+            Text(text = row.imageId, style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = stringResource(R.string.images_cache_footprint, row.subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (deleting) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        } else {
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.images_cache_delete),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- 工具

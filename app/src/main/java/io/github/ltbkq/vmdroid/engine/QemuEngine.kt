@@ -28,6 +28,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import io.github.ltbkq.vmdroid.data.repository.PortForwardRule
+import io.github.ltbkq.vmdroid.systemimage.BootParams
+import io.github.ltbkq.vmdroid.systemimage.EspUserCfgWriter
+import io.github.ltbkq.vmdroid.systemimage.VmdDiskCodec
 import io.github.ltbkq.vmdroid.util.HostMetrics
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -283,6 +286,24 @@ class QemuEngine @Inject constructor(
         return null
     }
 
+    /**
+     * v2 image active but the UEFI firmware is not on disk — DESIGN §3.1/§8.3:
+     * a v2 image cannot boot without `-bios QEMU_EFI.fd` (there is no
+     * `-kernel` path back). The firmware ships as the APK asset `qemu/QEMU_EFI.fd`
+     * and is extracted wholesale by VmdroidApplication's `copyAssetDir("qemu", …)`,
+     * so a miss means a stripped/repackaged APK rather than a user error.
+     * Mirrors [failFastNoImage]: readable VmState.Error, no process/scope exists yet.
+     */
+    private fun failFastMissingFirmware(firmware: File): List<String>? {
+        Log.e(TAG, "NO_UEFI_FIRMWARE: $firmware missing — v2 system image requires UEFI boot")
+        _bootStage.value = ""
+        failEarlyStart(
+            "NO_UEFI_FIRMWARE: UEFI 固件缺失（${firmware.name} 未随 APK 资产提取），" +
+                "v2 系统镜像无法启动；请重新安装应用包",
+        )
+        return null
+    }
+
     override suspend fun start(portForwards: List<PortForwardRule>, config: VmConfig) {
         // Atomically check the re-entrancy guard AND claim Starting before any
         // I/O, so two concurrent ACTION_STARTs can't both pass the guard and
@@ -327,12 +348,30 @@ class QemuEngine @Inject constructor(
         File(hostSockPath).delete()
 
         try {
-            // Kernel/initrd come from the active image footer (not APK assets);
-            // refresh them before buildCommand() decides whether to pass -kernel.
-            withContext(Dispatchers.IO) { systemImageRepository.extractBootPayloads() }
+            // Format split (DESIGN-disk-image-v2 §3.1): a v2 full-disk image
+            // boots UEFI → GRUB → kernel from the image's own ESP, so the v1
+            // footer payload extraction is pointless there (a v2 image has no
+            // kernel segment; extractBootPayloads would just return false).
+            // A v1 image keeps the old direct-boot path untouched — migration-
+            // period coexistence. VmdDiskProbe is a 3×512B read, run per boot.
+            val activeImg = systemImageRepository.activeRootfsPath()
+            val imageIsV2 = activeImg != null && VmdDiskProbe.isV2Image(activeImg)
+            if (imageIsV2 && activeImg != null) {
+                // R8（IMAGE-FORMAT-v2 §2.4 R8 / DESIGN-disk-image-v2 §3.4 方案 b、
+                // §7.2 T-10 收尾）：v2 停机期把运行时参数定长覆盖写进 ESP
+                // /grub/user.cfg（GRUB source 后经 $podroid_params 进内核 cmdline）。
+                // best-effort：sanitize 拒绝 / 写失败 / 回读不一致 → 只 Log.w，
+                // 照常以默认参数启动，**绝不**阻断 start()（helper 内全量兜异常）。
+                withContext(Dispatchers.IO) { writeV2RuntimeParams(activeImg, config) }
+            }
+            if (activeImg != null && !imageIsV2) {
+                // Kernel/initrd come from the active image footer (not APK assets);
+                // refresh them before buildCommand() decides whether to pass -kernel.
+                withContext(Dispatchers.IO) { systemImageRepository.extractBootPayloads() }
+            }
             // null => failFastNoImage() already logged NO_SYSTEM_IMAGE and put
             // the engine into VmState.Error; bail before spawning anything.
-            val cmd = buildCommand(qemuExe, portForwards, config) ?: return
+            val cmd = buildCommand(qemuExe, portForwards, config, imageIsV2) ?: return
             Log.d(TAG, "Launching QEMU with ${cmd.size} args: $cmd")
 
             val nativeDir = context.applicationInfo.nativeLibraryDir
@@ -565,10 +604,56 @@ class QemuEngine @Inject constructor(
         _bootStage.value = ""
     }
 
+    /**
+     * R8：v2 启动前把运行时参数写入 ESP `/grub/user.cfg`（IMAGE-FORMAT-v2 §2.4 R8，
+     * DESIGN-disk-image-v2 §3.4 方案 b）。停机期 FAT 定长覆盖 + 回读比对，见
+     * [EspUserCfgWriter.write]。
+     *
+     * 读盘两次的说明：启动探测用的 `VmdDiskProbe.isV2Image` 是 3×512B 快检、只回 bool，
+     * 没有 esp 范围可复用 → 这里再用 [VmdDiskCodec.read] 拿权威 `esp_offset/esp_size`
+     * （GPT + meta + manifest 的 KB 级小读，非全盘 hash，成本可接受；重复读是刻意取舍）。
+     *
+     * 失败语义（硬性）：sanitize 拒绝 / codec 读失败 / 写入失败 / 回读不一致 →
+     * 仅 `Log.w` 并照常用默认参数启动 —— **绝不**阻断启动，绝不抛出到 [start] 流程。
+     */
+    private fun writeV2RuntimeParams(imageFile: File, config: VmConfig) {
+        try {
+            val info = VmdDiskCodec.read(imageFile)
+            val sanitized = EspUserCfgWriter.sanitize(
+                BootParams(
+                    x11Dpi = config.x11Dpi,
+                    bandwidthMbps = config.bandwidthMbps,
+                    dnsServers = config.dnsServers,
+                    kernelExtras = config.kernelExtraCmdline,
+                ),
+            )
+            if (sanitized == null) {
+                // fail-closed（R8-4）：拒绝该参数串 → 写入"无 set 行"版本清掉陈值，
+                // 本次启动 guest 拿默认参数（照常启动，不阻断）。
+                Log.w(TAG, "R8 user.cfg: 参数白名单拒绝（fail-closed），写入空参数串，本次用默认值启动")
+            }
+            val content = EspUserCfgWriter.build(sanitized)   // null/"" → 仅魔数行
+            EspUserCfgWriter.write(
+                imageFile,
+                info.espPartition.offsetBytes,
+                info.espPartition.sizeBytes,
+                content,
+            ).onSuccess {
+                Log.d(TAG, "R8 user.cfg written: params='${sanitized ?: ""}'")
+            }.onFailure { e ->
+                Log.w(TAG, "R8 user.cfg write failed — 照常用默认参数启动: ${e.message}", e)
+            }
+        } catch (t: Throwable) {
+            // 硬性失败语义：任何异常只记 warning，绝不阻断启动
+            Log.w(TAG, "R8 user.cfg skipped — 照常用默认参数启动: ${t.message}", t)
+        }
+    }
+
     private fun buildCommand(
         qemuExe: File,
         portForwards: List<PortForwardRule>,
         config: VmConfig,
+        imageIsV2: Boolean,
     ): List<String>? {
         val args = mutableListOf<String>()
         val userQemuExtras = config.qemuExtraArgs.trim()
@@ -586,30 +671,52 @@ class QemuEngine @Inject constructor(
         args += "-smp"; args += "${config.cpus}"
         args += "-m";   args += "${config.ramMb}"
 
-        val kernelPath = File(context.filesDir, "vmlinuz-virt")
-        val initrdPath = File(context.filesDir, "initrd.img")
+        if (imageIsV2) {
+            // ── v2 full-disk image: UEFI direct boot (DESIGN-disk-image-v2 §3.1) ──
+            // edk2 scans vdb → \EFI\BOOT\BOOTAA64.EFI (GRUB, embedded cfg) → loads
+            // /vmlinuz + /initrd.img from the ESP. NO -kernel / -initrd / -append:
+            // the kernel cmdline is baked into GRUB's cfg (IMAGE-FORMAT-v2 §2.4).
+            //
+            // TBD-1 (DESIGN §3.4) → R8 done: the runtime-tunable params the v1
+            // -append used to carry (podroid.x11.dpi / podroid.bandwidth /
+            // podroid.dns / kernelExtraCmdline) now go through plan **b** — ESP
+            // `/grub/user.cfg`, a fixed 4096-byte GRUB script `source`d by the
+            // embedded cfg and expanded as $podroid_params on the `linux` line
+            // (IMAGE-FORMAT-v2 §2.4 R8). The stop-the-world FAT write happens in
+            // writeV2RuntimeParams() (called from start() above), deliberately NOT
+            // here: buildCommand only assembles argv, and a params-write failure
+            // must never block spawning QEMU (fail-closed → default params).
+            val firmware = File(context.filesDir, "qemu/QEMU_EFI.fd")
+            if (!firmware.isFile) return failFastMissingFirmware(firmware)
+            args += "-bios"; args += firmware.absolutePath
+        } else {
+            // ── v1 image: direct kernel boot (unchanged migration-period path) ──
+            val kernelPath = File(context.filesDir, "vmlinuz-virt")
+            val initrdPath = File(context.filesDir, "initrd.img")
 
-        if (kernelPath.exists()) {
-            args += "-kernel"; args += kernelPath.absolutePath
-            val cmdline = buildString {
-                // mitigations=off: speculative-exec attacks don't cross the TCG ISA boundary; 5–15% gain.
-                append("console=ttyAMA0 mitigations=off")
-                if (userKernelExtras.isNotEmpty()) append(" ").append(userKernelExtras)
-                append(" androidip=").append(config.androidIp)
-                if (config.sshEnabled) append(" ssh=1")
-                append(" podroid.x11.dpi=").append(config.x11Dpi)
-                if (config.bandwidthMbps > 0) append(" podroid.bandwidth=").append(config.bandwidthMbps)
-                if (config.dnsServers.isNotEmpty()) append(" podroid.dns=").append(config.dnsServers.joinToString(","))
+            if (kernelPath.exists()) {
+                args += "-kernel"; args += kernelPath.absolutePath
+                val cmdline = buildString {
+                    // mitigations=off: speculative-exec attacks don't cross the TCG ISA boundary; 5–15% gain.
+                    append("console=ttyAMA0 mitigations=off")
+                    if (userKernelExtras.isNotEmpty()) append(" ").append(userKernelExtras)
+                    // androidip= / ssh=1 dropped: P0-7 source audit found no consumer
+                    // (docs/DELTAS.md calls them upstream dead params); v2 has no
+                    // -append at all (DESIGN §3.4).
+                    append(" podroid.x11.dpi=").append(config.x11Dpi)
+                    if (config.bandwidthMbps > 0) append(" podroid.bandwidth=").append(config.bandwidthMbps)
+                    if (config.dnsServers.isNotEmpty()) append(" podroid.dns=").append(config.dnsServers.joinToString(","))
+                }
+                args += "-append"; args += cmdline
+            } else {
+                Log.w(TAG, "Kernel not found!")
             }
-            args += "-append"; args += cmdline
-        } else {
-            Log.w(TAG, "Kernel not found!")
-        }
 
-        if (initrdPath.exists()) {
-            args += "-initrd"; args += initrdPath.absolutePath
-        } else {
-            Log.w(TAG, "Initrd not found!")
+            if (initrdPath.exists()) {
+                args += "-initrd"; args += initrdPath.absolutePath
+            } else {
+                Log.w(TAG, "Initrd not found!")
+            }
         }
 
         val storagePath = File(context.filesDir, "storage.img")
@@ -629,18 +736,26 @@ class QemuEngine @Inject constructor(
             args += "-drive";  args += "file=${storagePath.absolutePath},if=none,id=drive1,format=raw,cache=writeback,aio=threads,discard=unmap,detect-zeroes=unmap"
         }
 
-        // The system image (vdb, read-only rootfs) is NOT bundled with the APK:
-        // it comes from filesDir/images/ via SystemImageRepository. null means
-        // no image is installed/active — fail fast instead of silently omitting
-        // drive2 and booting a guest whose init-podroid would hang mounting vdb
+        // The system image (vdb) is NOT bundled with the APK: it comes from
+        // filesDir/images/ via SystemImageRepository. null means no image is
+        // installed/active — fail fast instead of silently omitting drive2 and
+        // booting a guest whose init-podroid would hang mounting vdb
         // (DESIGN §7.1/§7.4 NO_SYSTEM_IMAGE).
         val rootfsImg = systemImageRepository.activeRootfsPath()
             ?: return failFastNoImage()
-        // Dedicated iothread for the read-only system image so its decompression
-        // reads don't queue behind storage.img writes on iothread0.
+        // Dedicated iothread for the system image so its I/O doesn't queue
+        // behind storage.img writes on iothread0.
         args += "-object"; args += "iothread,id=iothread1"
         args += "-device"; args += "virtio-blk-pci,drive=drive2,num-queues=${config.cpus},iothread=iothread1"
-        args += "-drive";  args += "file=${rootfsImg.absolutePath},if=none,id=drive2,format=raw,readonly=on,cache=writeback,aio=threads"
+        // v2 (DESIGN §3.1): vdb is a WRITABLE runtime disk — no readonly=on —
+        // with discard=unmap,detect-zeroes=unmap so guest fstrim hands holes
+        // back to the host (.img stays sparse; matches vda). v1 keeps the
+        // historical read-only squashfs attachment.
+        args += "-drive";  args += if (imageIsV2) {
+            "file=${rootfsImg.absolutePath},if=none,id=drive2,format=raw,cache=writeback,aio=threads,discard=unmap,detect-zeroes=unmap"
+        } else {
+            "file=${rootfsImg.absolutePath},if=none,id=drive2,format=raw,readonly=on,cache=writeback,aio=threads"
+        }
 
         // Downloads folder sharing via virtio-9p
         val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(

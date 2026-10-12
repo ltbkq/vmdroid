@@ -24,10 +24,13 @@ import io.github.ltbkq.vmdroid.di.ApplicationScope
 import io.github.ltbkq.vmdroid.engine.EngineHolder
 import io.github.ltbkq.vmdroid.engine.EngineSelection
 import io.github.ltbkq.vmdroid.engine.VmState
+import io.github.ltbkq.vmdroid.systemimage.SystemImageRepository
+import io.github.ltbkq.vmdroid.ui.imageErrorMessage
 import io.github.ltbkq.vmdroid.util.DeviceResourcePolicy
 import io.github.ltbkq.vmdroid.util.NetworkUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -95,6 +99,34 @@ private data class LocaleRowsGroup(
     val systemDefaultLanguage: String,
 )
 
+/**
+ * §6.5 系统盘扩容档位（GiB）。与 `DeviceResourcePolicy.STORAGE_OPTIONS_GB`（数据盘）
+ * 并列；上限 32 GiB 与构建期 `--root-size` 档位对齐（DESIGN-disk-image-v2 §6.5）。
+ * **只增不减**（§6.5 反向缩容不支持）。
+ */
+val SYSTEM_DISK_OPTIONS_GB = listOf(4, 8, 16, 32)
+
+/** §6.5 扩容控件状态（`.img` 表观容量 + meta `pending_grow` + 一次性提示）。 */
+data class SystemDiskUiState(
+    /** 激活镜像 id（null = 无激活镜像 → 控件禁用）。 */
+    val activeId: String? = null,
+    /** `.img` 表观容量（GiB，展示与档位选择用）。 */
+    val sizeGiB: Int = 0,
+    /** §10 v1 旧格式镜像（BootGuard 拒启；§6.5 扩容不适用 → 控件禁用）。 */
+    val legacy: Boolean = false,
+    /** meta `pending_grow`：应用侧已扩容、等待 guest 下次开机自扩容。 */
+    val pendingGrow: Boolean = false,
+    /** 激活镜像存在且为 v2（唯一可扩容形态）。 */
+    val growable: Boolean = false,
+    /** 扩容动作在飞（稀疏 `setLength` 秒级；期间控件禁用）。 */
+    val busy: Boolean = false,
+    /** 一次性提示（成功/失败；屏幕用 snackbar 展示后清空）。 */
+    val message: String? = null,
+) {
+    /** 当前选中档位（表观容量恰在档位表内时；否则 null = 只展示不选中任何档）。 */
+    val currentGiB: Int? get() = sizeGiB.takeIf { it in SYSTEM_DISK_OPTIONS_GB }
+}
+
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -102,6 +134,7 @@ class SettingsViewModel @Inject constructor(
     private val portForwardRepository: PortForwardRepository,
     private val engine: EngineHolder,
     private val languageManager: LanguageManager,
+    private val systemImages: SystemImageRepository,
     @ApplicationScope private val externalScope: CoroutineScope,
 ) : ViewModel() {
 
@@ -256,6 +289,69 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setLoadBalanceEnabled(false)
             settingsRepository.setStorageSizeGb(value)
         }
+    }
+
+    // ---------------------------------------------------------------- 系统盘扩容（§6.5）
+
+    private val _systemDisk = MutableStateFlow(SystemDiskUiState())
+
+    /** §6.5「系统盘容量」控件状态（扫描 `.img` 表观容量 + meta `pending_grow`）。 */
+    val systemDisk: StateFlow<SystemDiskUiState> = _systemDisk.asStateFlow()
+
+    init {
+        refreshSystemDisk()
+    }
+
+    /** §6.5 重扫（设置页 ON_RESUME / VM 停机后 / 扩容动作收尾；只读，秒回）。 */
+    fun refreshSystemDisk() {
+        viewModelScope.launch {
+            val snap = withContext(Dispatchers.IO) {
+                runCatching { systemImages.systemDiskSnapshot() }.getOrNull()
+            } ?: return@launch
+            _systemDisk.update { cur ->
+                cur.copy(
+                    activeId = snap.activeId,
+                    sizeGiB = bytesToGiB(snap.sizeBytes),
+                    legacy = snap.legacyFormat,
+                    pendingGrow = snap.pendingGrow,
+                    growable = snap.growable,
+                    busy = false,
+                )
+            }
+        }
+    }
+
+    /**
+     * §6.5 选档 → `repository.growSystemImage(activeId, bytes)`（**VM 停机时**才允许：
+     * 前置条件由调用方（控件禁用）+ [SystemDiskUiState.growable] 共同保证）。
+     * 成功后提示「下次启动自动扩容」（guest 完成分区与文件系统扩展，§6.5）。
+     */
+    fun growSystemDisk(giB: Int) {
+        val snap = _systemDisk.value
+        val id = snap.activeId ?: return
+        if (!snap.growable || snap.busy) return
+        if (giB <= snap.sizeGiB) return // §6.5 只增不减（UI 已禁用，这里是竞态防线）
+        _systemDisk.update { it.copy(busy = true, message = null) }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    systemImages.growSystemImage(id, giB * SYSTEM_DISK_GIB)
+                }
+                refreshSystemDisk()
+                _systemDisk.update {
+                    it.copy(busy = false, message = context.getString(R.string.system_disk_grow_done, giB))
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                Log.w(TAG, "grow system image failed", t)
+                refreshSystemDisk()
+                _systemDisk.update { it.copy(busy = false, message = imageErrorMessage(context, t)) }
+            }
+        }
+    }
+
+    fun clearSystemDiskMessage() {
+        _systemDisk.update { it.copy(message = null) }
     }
 
     fun setVmCpus(value: Int) {
@@ -550,6 +646,11 @@ class SettingsViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "SettingsViewModel"
+
+        /** §6.5 GiB 换算（档位与展示统一四舍五入到整 GiB）。 */
+        private const val SYSTEM_DISK_GIB = 1024L * 1024 * 1024
+
+        private fun bytesToGiB(bytes: Long): Int = ((bytes + SYSTEM_DISK_GIB / 2) / SYSTEM_DISK_GIB).toInt()
         private const val MAX_LOGCAT_LINES = 1500
         /**
          * Vmdroid's own logcat tags: the const TAGs plus the two literal-string

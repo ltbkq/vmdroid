@@ -22,12 +22,15 @@ import androidx.annotation.RequiresApi
 import io.github.ltbkq.vmdroid.data.repository.PortForwardRule
 import io.github.ltbkq.vmdroid.data.repository.SettingsRepository
 import io.github.ltbkq.vmdroid.engine.BootStageDetector
+import io.github.ltbkq.vmdroid.engine.EspPayloadExtractor
 import io.github.ltbkq.vmdroid.engine.ProxySessionClient
 import io.github.ltbkq.vmdroid.engine.QmpClient
 import io.github.ltbkq.vmdroid.engine.TerminalBridge
 import io.github.ltbkq.vmdroid.engine.VmConfig
 import io.github.ltbkq.vmdroid.engine.VmEngine
+import io.github.ltbkq.vmdroid.engine.VmdDiskProbe
 import io.github.ltbkq.vmdroid.engine.VmState
+import io.github.ltbkq.vmdroid.systemimage.VmdDiskCodec
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -496,8 +499,8 @@ class AvfEngine @Inject constructor(
             // Fan out: VM ↔ filesystem socket. The bridge subprocess connects to
             // that socket and splices PTY ↔ socket. BootStageDetector tees the
             // VM output to drive boot-stage + state transitions; onVmBytes tees
-            // the boot-phase bytes (Starting only — see the privacy note there)
-            // to console.log + the consoleText flow.
+            // to console.log (Starting only — see the privacy note there) and to
+            // the in-memory consoleText flow (whole run, §7.1 启动过程可视化).
             val fo = ConsoleFanout(
                 consoleOutput = inStream,
                 consoleInput = outStream,
@@ -518,20 +521,25 @@ class AvfEngine @Inject constructor(
                             log?.write(buf, 0, n)
                             log?.flush()
                         }
-                        // UTF-8 decode best-effort (split multi-byte sequences may
-                        // surface as U+FFFD here — acceptable for the diagnostic
-                        // tail; the raw bytes hit disk faithfully above).
-                        // Guard the StringBuilder: this runs on the fanout pump thread
-                        // while start() may clear it on another (fast Stop → Start).
-                        val snapshot = synchronized(consoleLock) {
-                            consoleBuilder.append(String(buf, 0, n, Charsets.UTF_8))
-                            if (consoleBuilder.length > maxConsoleSize) {
-                                consoleBuilder.delete(0, consoleBuilder.length - maxConsoleSize)
-                            }
-                            consoleBuilder.toString()
-                        }
-                        _consoleText.value = snapshot
                     }
+                    // consoleText tee — §7.1 启动过程可视化的数据源。与
+                    // QemuBootMonitor 同语义：**全程**喂（不受上面 console.log
+                    // 隐私门的 Starting 限制），因为它是进程内 StateFlow，不落盘、
+                    // 不进可导出的诊断日志，无隐私差异；同样是 64KB 环形取尾。
+                    // UTF-8 decode best-effort (split multi-byte sequences may
+                    // surface as U+FFFD here — acceptable for the diagnostic
+                    // tail; the raw bytes hit console.log faithfully when the
+                    // privacy gate above is open).
+                    // Guard the StringBuilder: this runs on the fanout pump thread
+                    // while start() may clear it on another (fast Stop → Start).
+                    val snapshot = synchronized(consoleLock) {
+                        consoleBuilder.append(String(buf, 0, n, Charsets.UTF_8))
+                        if (consoleBuilder.length > maxConsoleSize) {
+                            consoleBuilder.delete(0, consoleBuilder.length - maxConsoleSize)
+                        }
+                        consoleBuilder.toString()
+                    }
+                    _consoleText.value = snapshot
                 },
             )
             fanout = fo
@@ -1051,19 +1059,44 @@ class AvfEngine @Inject constructor(
         // NOT rewrite this launch's topology back up (issue #29).
         if (!useExplicitCpuCount) AvfReflect.disarmExplicitCpuCount()
 
-        val kernelSrc = File(context.filesDir, "vmlinuz-virt").also {
-            require(it.exists()) { "kernel missing at ${it.absolutePath}" }
-        }
-        val kernel = ensureRawKernel(kernelSrc)
-        val initrd = File(context.filesDir, "initrd.img").also {
-            require(it.exists()) { "initrd missing at ${it.absolutePath}" }
+        // ── Boot payloads: v1 = footer extraction, v2 = ESP extraction (§3.2 方案 B) ──
+        // AVF has no firmware/pflash channel, so a v2 full-disk image cannot go
+        // UEFI → GRUB here. Plan B: read /vmlinuz + /initrd.img out of the
+        // image's own ESP (FAT32) and feed them to setKernelPath/setInitrdPath.
+        // The kernel still comes from the image — this is not a v1 fallback.
+        // v1 images keep the historical footer-extracted filesDir payload.
+        val imageIsV2 = VmdDiskProbe.isV2Image(rootfsImg)
+        var rootPartUuid: String? = null
+        val kernel: File
+        val initrd: File
+        if (imageIsV2) {
+            // Throws VmdDiskException (stages 1–3) / IOException (ESP read, sha
+            // mismatch) → start()'s catch surfaces it as a readable VmState.Error.
+            val info = VmdDiskCodec.read(rootfsImg)
+            val payload = EspPayloadExtractor.extract(
+                info, File(context.filesDir, EspPayloadExtractor.DIR_NAME),
+            )
+            // ESP stores the uncompressed arm64 Image (IMAGE-FORMAT-v2 §2.3 M-a),
+            // so ensureRawKernel's gzip magic test returns it untouched; it still
+            // guards the (spec-legal) gzip-in-ESP case.
+            kernel = ensureRawKernel(payload.kernel)
+            initrd = payload.initrd
+            // init-podroid-v2 FATALs without `vmd.root_partuuid=` on the cmdline
+            // (it verifies the value against GPT entry 3 before mounting vdb3).
+            // On the QEMU path GRUB's baked-in cfg supplies it (§2.4); AVF has
+            // no GRUB, so addParams is its equivalent channel.
+            rootPartUuid = info.rootPartition.uniqueGuid
+        } else {
+            kernel = ensureRawKernel(
+                File(context.filesDir, "vmlinuz-virt").also {
+                    require(it.exists()) { "kernel missing at ${it.absolutePath}" }
+                },
+            )
+            initrd = File(context.filesDir, "initrd.img").also {
+                require(it.exists()) { "initrd missing at ${it.absolutePath}" }
+            }
         }
         val storage = ensureStorageImage(config.storageSizeGb)
-        // Read-only system image (vdb). Resolved from SystemImageRepository in
-        // launchAttempt — which fails fast with NO_SYSTEM_IMAGE before we get
-        // here when no image is active — replacing the upstream hardcoded
-        // filesDir rootfs file + require(exists) (DESIGN §7.2).
-        val squashfs = rootfsImg
 
         val cb = AvfReflect.newCustomBuilder()
         AvfReflect.setName(cb, VM_NAME)
@@ -1107,10 +1140,16 @@ class AvfEngine @Inject constructor(
         // AvfCpuPolicy.
         val nrCpusFlag =
             if (effectiveCpus > 1 && !useExplicitCpuCount) " nr_cpus=$effectiveCpus" else ""
+        // Runtime params ride addParams (DESIGN §3.4 方案 a — QEMU 的 UEFI 路径没有
+        // 这条通道，走 TBD-1 方案 b；AVF 各用各的通道，可接受)。podroid.tty/backend/
+        // epoch/x11.dpi/bandwidth 保留；androidip= / ssh=1 **不传** —— P0-7 源码实测
+        // 无人消费（docs/DELTAS.md 标注为上游死参数），v2 侧 QEMU 更是根本没有 -append。
+        // v2 镜像额外带 vmd.root_partuuid=（init-podroid-v2 缺它即 FATAL，见上）。
         val resolvedCmdline = ("console=hvc0 $earlycon root=/dev/ram0 mitigations=off " +
             "elevator=mq-deadline podroid.tty=hvc0 podroid.backend=avf podroid.epoch=$epoch " +
             "podroid.x11.dpi=${config.x11Dpi}$verboseFlags$nrCpusFlag " +
             (if (config.bandwidthMbps > 0) "podroid.bandwidth=${config.bandwidthMbps} " else "") +
+            (rootPartUuid?.let { "vmd.root_partuuid=$it " } ?: "") +
             config.kernelExtraCmdline).trim()
         AvfReflect.addParams(cb, resolvedCmdline)
         if (config.verboseLogging) {
@@ -1119,7 +1158,11 @@ class AvfEngine @Inject constructor(
                 "storageAccess=${config.storageAccessEnabled}")
         }
         AvfReflect.addDisk(cb, storage.absolutePath, writable = true)
-        AvfReflect.addDisk(cb, squashfs.absolutePath, writable = false)
+        // System image (vdb): v1 = read-only squashfs; v2 = a WRITABLE full-disk
+        // GPT image (root ext4 lives inside it, DESIGN §4.3 — guest writes land
+        // directly in the .img, no overlay). Crosvm discards aren't wired here;
+        // sparse files still grow only where the guest actually writes.
+        AvfReflect.addDisk(cb, rootfsImg.absolutePath, writable = imageIsV2)
         // The actual share is a post-boot AvfDownloadsShare connecting over vsock
         // (see bringUpControlChannel()); the real outcome ("added"/"unavailable")
         // isn't known until then, so this summary just reflects the setting here.
@@ -1168,6 +1211,7 @@ class AvfEngine @Inject constructor(
         }
         launchConfigSummary = "vCPUs=$effectiveCpus ($cpuMode, requested ${config.cpus}$capStr), " +
             "memory=${config.ramMb}MB, console=hvc0, " +
+            "image=${if (imageIsV2) "v2 (ESP-extract direct boot)" else "v1 (footer payload)"}, " +
             "protectedVm=$protectedStr, downloadsShare=$shareSummary, verboseLogging=${config.verboseLogging}"
         return AvfReflect.build(vb)
     }

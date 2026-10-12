@@ -105,6 +105,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val vmState by viewModel.vmState.collectAsStateWithLifecycle()
     val bootStage by viewModel.bootStage.collectAsStateWithLifecycle()
+    val bootLog by viewModel.bootLog.collectAsStateWithLifecycle()
     val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
     val meta by viewModel.meta.collectAsStateWithLifecycle()
     val uptimeTick by viewModel.uptimeTicker.collectAsStateWithLifecycle()
@@ -295,6 +296,8 @@ fun HomeScreen(
                             onUseOneCore = { viewModel.useOneCoreAndRetry() },
                             onSwitchToQemu = { viewModel.switchToQemuAndRetry() },
                             onRetry = { viewModel.restartVm() },
+                            bootLog = bootLog,
+                            onToggleBootLog = viewModel::toggleBootLog,
                         )
                         HomeDataSection(
                             isRunning, isStopping, vmState, meta, phoneIp, containerCount,
@@ -367,6 +370,8 @@ fun HomeScreen(
                         onUseOneCore = { viewModel.useOneCoreAndRetry() },
                         onSwitchToQemu = { viewModel.switchToQemuAndRetry() },
                         onRetry = { viewModel.restartVm() },
+                        bootLog = bootLog,
+                        onToggleBootLog = viewModel::toggleBootLog,
                     )
                     HomeDataSection(isRunning, isStopping, vmState, meta, phoneIp, containerCount)
                     Spacer(Modifier.weight(1f))
@@ -516,6 +521,9 @@ private fun HomeStatusBlock(
     onUseOneCore: () -> Unit = {},
     onSwitchToQemu: () -> Unit = {},
     onRetry: () -> Unit = {},
+    /** §7.1 启动过程可视化：日志尾巴（启动中实时滚动，Running 后收起为摘要）。 */
+    bootLog: BootLogUi = BootLogUi.EMPTY,
+    onToggleBootLog: () -> Unit = {},
 ) {
     VmdroidSectionLabel(stringResource(R.string.vm_status))
     val statusText = when {
@@ -571,6 +579,13 @@ private fun HomeStatusBlock(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+    // §7.1：阶段标签（上一行 VmdroidStatus）= 进度语义，下面的日志尾巴 = 明细
+    // 语义。启动中实时跟随；Running/Stopped/Error 收起成一行摘要可点开。
+    HomeBootLogPanel(
+        bootLog = bootLog,
+        isRunning = isRunning,
+        onToggle = onToggleBootLog,
+    )
     // FIXLIST ISSUE-04：Running 只有两个来源 —— ①detector 抓到 "Ready!"
     // (bootStage="Ready") ②120s 超时兜底（bootStage 被标 Timeout，但后续
     // console 标记仍可能覆盖它）。所以判定用"Running 且从未确认 Ready"，

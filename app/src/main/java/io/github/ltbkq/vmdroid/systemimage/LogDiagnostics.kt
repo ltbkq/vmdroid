@@ -590,8 +590,14 @@ class ImageLog @JvmOverloads constructor(
         const val IMAGE_LOG_MAX_FILES = 3 // §16.9：3 × 2MB
         const val IMAGE_LOG_MAX_BYTES = 2L * 1024 * 1024
 
-        /** fsync 的关键事件（§16.3）。 */
-        val SYNC_EVENTS: Set<String> = setOf("activate", "verify_fail", "factory_reset")
+        /**
+         * fsync 的关键事件（§16.3）。
+         *
+         * `boot_done`（§7.2 T-3 回流）：它是 §5.4 归因双证据之一（image.log 侧；
+         * 另一份是 fsync 过的 `boots/<id>.meta.json`），不 fsync 则极端崩溃窗口可能
+         * 只剩 boots meta 单证据。
+         */
+        val SYNC_EVENTS: Set<String> = setOf("activate", "verify_fail", "factory_reset", "boot_done")
     }
 }
 

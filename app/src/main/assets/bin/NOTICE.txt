@@ -1,0 +1,106 @@
+Third-party notice: zstd (Zstandard)
+====================================
+
+Version:    1.5.6
+Release:    v1.5.6 (upstream git tag "v1.5.6")
+Source:     https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
+Tarball sha256:
+8c29e06cf42aacc1eafc4077ae2ec6c6fcb96a626157e0593d5e82a34fd403c1  zstd-1.5.6.tar.gz
+
+Target / artifact
+-----------------
+Target:    Android arm64 (aarch64), Linux userspace
+Artifact:  app/src/main/assets/bin/zstd  (this directory's sibling file)
+Binary:    ELF 64-bit LSB executable, ARM aarch64, statically linked,
+           no INTERP segment, no dynamic section / no NEEDED libs
+Size:      1840872 bytes (1,840,872 B ~ 1.76 MiB); built with default (-O3)
+           flags and NOT stripped (already under the 4 MB budget; no -Os
+           and no strip were applied)
+
+Build commands (exactly as run, on Ubuntu 24.04 host)
+------------------------------------------------------
+  mkdir -p /tmp/opencode/zstd-build && cd /tmp/opencode/zstd-build
+  curl -fLLO https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
+  sha256sum zstd-1.5.6.tar.gz
+  tar xzf zstd-1.5.6.tar.gz
+  cd zstd-1.5.6
+  # NOTE: the release tarball uses lib/ (the git checkout calls it libzstd/)
+  make -C lib libzstd.a -j"$(nproc)" CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar
+  make -C programs zstd CC=aarch64-linux-gnu-gcc LD=aarch64-linux-gnu-gcc \
+      AR=aarch64-linux-gnu-ar LDFLAGS="-static" -j"$(nproc)"
+  # (no -Os, no strip; zstdless/zstdgrep were never built — target "zstd" only)
+
+Cross-compiler version line:
+  aarch64-linux-gnu-gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+
+Verification (raw results summary)
+----------------------------------
+  file programs/zstd:
+    ELF 64-bit LSB executable, ARM aarch64, version 1 (GNU/Linux),
+    statically linked, BuildID[sha1]=6e0a372691f11a36a2448b6e0a303c2e0a392e69,
+    for GNU/Linux 3.7.0, not stripped
+  readelf -h:  Type: EXEC (Executable file); Machine: AArch64;
+               Entry point address: 0x404500
+  readelf -l | grep -i interp:  (empty — no INTERP segment)
+  readelf -d:  "There is no dynamic section in this file." (no NEEDED deps)
+  Executed locally under qemu-user (qemu-aarch64-static on the build host):
+    - `qemu-aarch64-static ./programs/zstd --version` ->
+      *** Zstandard CLI (64-bit) v1.5.6, by Yann Collet ***
+    - pipe roundtrip `printf vmdroid | zstd -19 | zstd -dc` -> printed: vmdroid
+    - file roundtrip: 300000 random bytes, `zstd -f -19` then `zstd -dc`,
+      cmp identical -> ROUNDTRIP-OK
+
+Purpose in this app
+-------------------
+The VMDroid app installs `.img.zst` compressed system images. It performs
+streaming decompression by executing this statically linked binary as a
+subprocess: `ProcessBuilder(zstd, "-dc")` with the compressed source bytes
+fed on stdin (see the header comment of
+app/src/main/java/io/github/ltbkq/vmdroid/systemimage/ZstdInflator.kt).
+
+Asset path:  app/src/main/assets/bin/zstd
+Runtime:     extracted by SystemImageRepository.ensureZstdBinary() into
+             filesDir/bin/zstd and made executable (chmod +x); if the asset
+             is missing, resolution falls back to a zstd found on PATH
+             (development-only fallback).
+
+License
+-------
+Zstd is released under a dual BSD / zlib-style license; upstream labels the
+license text "BSD License". The FULL verbatim text of the upstream LICENSE
+file (from the zstd-1.5.6 source root) follows:
+
+----- BEGIN upstream LICENSE (zstd v1.5.6) -----
+
+BSD License
+
+For Zstandard software
+
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook, nor Meta, nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+----- END upstream LICENSE (zstd v1.5.6) -----

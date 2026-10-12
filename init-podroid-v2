@@ -1,0 +1,297 @@
+#!/bin/sh
+# Podroid initramfs bootstrap **v2** — mounts the v2 full-disk image (GPT p3 root
+# ext4), switch_root to /sbin/init.
+#
+# 规格依据（v2 与 v1 的唯一差别都在"挂系统"及之后的段落）：
+#   * IMAGE-FORMAT-v2.md §2.1（布局：p1 ESP / p2 meta / p3 root）、§2.2（GPT 表项
+#     GUID 是 mixed-endian）、§2.4（grub.cfg 把 vmd.root_partuuid= 注入 cmdline）
+#   * DESIGN-disk-image-v2.md §4.1（init-podroid v2 逐段要求）、§4.3（/home 归属
+#     vda storage.img）、§6.5（根分区扩容）
+#
+# 与 v1（同目录 init-podroid，原件不动）的差异清单：
+#   1. 删除 squashfs(/dev/vdb) + overlay + podroid-overlay-normalize 一段，改为直挂
+#      v2 磁盘的 p3 root ext4 → /mnt/root（无 overlay；/mnt/persist 只承载数据）。
+#   2. 新增 root 分区"防错盘"校验：cmdline 的 vmd.root_partuuid 与 GPT 表项 3 的
+#      unique GUID 手读比对（initramfs 无 udev、无 /dev/disk/by-partuuid 软链）。
+#   3. 新增 meta 分区健康检查（p2 头 8 字节 "VMDIMG02"）。
+#   4. 新增根分区扩容（宿主停机期扩 .img → guest 内 GPT 吃满 + resize2fs，§6.5）。
+#   5. 新增 /home 归属：bind 到 vda 的 /mnt/persist/home，跨镜像重装保留（§4.3）。
+#   6. 控制台标记：保留 "Mounting storage..."（BootStageDetector 硬匹配项）与
+#      "Mounting system..."；不再打印 "Stacking overlay..."（v1 的失败点）。
+#   7. /home 绑定在 switch_root 之前完成，用户登录时家目录已就绪（与 v1 语义等价）。
+# v1 沿用、一字未改的段落：虚拟 fs 挂载、"Mounting storage..."、vda 的
+# ext4 挂载/e2fsck/mkfs 分支、resize2fs /dev/vda（含全部注释）。
+set -e
+
+# Ensure mount points exist (defensive: cpio packing can omit empty dirs).
+mkdir -p /proc /sys /dev /run
+
+echo "[podroid-init] mounting virtual filesystems" > /dev/console
+
+# Place -o BEFORE the device and mountpoint arguments.
+# util-linux's getopt stops processing options at the first non-option
+# argument when POSIXLY_CORRECT is set; options placed after the mountpoint
+# are then treated as extra positional args, not flags, which can result in
+# the mount(2) syscall being called with flags=0 and returning EPERM,
+# producing "must be superuser to use mount" even for root.
+mount -t proc    -o noexec,nosuid,nodev     proc      /proc
+echo "[podroid-init] mounted /proc" > /dev/console
+mount -t sysfs   -o noexec,nosuid,nodev     sysfs     /sys
+echo "[podroid-init] mounted /sys" > /dev/console
+
+# CONFIG_DEVTMPFS_MOUNT=y causes the kernel to pre-mount devtmpfs at /dev
+# before executing /init.  A second mount(2) there can return EBUSY, and
+# size= is not a valid option for devtmpfs in kernels where it is backed by
+# ramfs rather than tmpfs, causing EINVAL.  Either failure exits util-linux
+# with MNT_EX_FAIL=32; set -e then propagates exit(32), which the kernel
+# encodes as exitcode=0x00002000 ("Attempted to kill init!").
+# The kernel's pre-populated /dev is sufficient; || true makes this non-fatal.
+mount -t devtmpfs -o exec,nosuid,mode=0755  devtmpfs  /dev || true
+echo "[podroid-init] mounted /dev (or reused kernel pre-mount)" > /dev/console
+
+echo "Mounting storage..." > /dev/console
+
+# virtio_blk is built-in; modprobe is a no-op safety net
+[ -d "/lib/modules/$(uname -r)" ] && { depmod -a 2>/dev/null; modprobe virtio_blk 2>/dev/null; }
+
+# /dev/vda = persistent ext4 (user data, container storage, /home)
+# /dev/vdb = v2 full-disk image: GPT p1 ESP / p2 meta / p3 root ext4
+#   [v2 差异] v1 里 /dev/vdb 是只读 squashfs（overlay 的 lower）；v2 改为可写 ext4
+#   根分区，系统改动直接落盘，重装/换镜像即整分区重置（DESIGN §4.1）。
+#   [v2 差异] overlay 的 upper/work 不再使用，/mnt/persist 只承载数据（§4.3）。
+mkdir -p /mnt/persist /mnt/root
+
+# Bounded wait for the virtio block nodes: on most boots they already exist
+# (loop breaks on the first iteration), but a slow virtio_blk probe can lag
+# behind init. Cap the wait so a genuinely-missing node still drops to the
+# FATAL diagnostics below instead of hanging forever.
+for _i in $(seq 1 30); do
+    [ -b /dev/vda ] && [ -b /dev/vdb ] && break
+    sleep 0.1
+done
+
+# Persistent: format on first boot if needed.
+# noatime: stop atime writes on every read.
+# commit=1: journal commits every 1s (vs ext4's 5s default) so an abrupt
+#   VM kill (Stop/Restart) loses at most ~1s of writes. QEMU has no per-stop
+#   guest-sync channel, so this commit window is what bounds its data loss;
+#   the AVF backend additionally issues an explicit sync before stopping.
+# barrier=1: write barriers ON so ext4's journal ordering is durable. The
+#   guest's flushes reach storage.img through QEMU's writeback cache, which
+#   honors flushes, keeping the on-disk journal consistent for recovery.
+if ! mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vda /mnt/persist 2>/dev/null; then
+    # The first mount failed. e2fsck searches the backup superblocks by itself
+    # when the primary is damaged. Exit codes: 0 clean, 1 corrected, 2 corrected
+    # (reboot advised), 4 uncorrected, >=8 no usable filesystem or operational
+    # error. Never reformat a disk e2fsck could read: only a brand-new, all-zero
+    # storage.img (first boot) gets mkfs.
+    rc=0
+    e2fsck -y /dev/vda > /dev/console 2>&1 || rc=$?
+    if [ "$rc" -ge 8 ] && [ -z "$(dd if=/dev/vda bs=1M count=1 2>/dev/null | tr -d '\000' | head -c 1)" ]; then
+        mkfs.ext4 -q -F /dev/vda
+    elif [ "$rc" -ge 4 ]; then
+        echo "FATAL: persistent ext4 (/dev/vda) could not be repaired (e2fsck rc=$rc); not reformatting, to keep the data" > /dev/console
+        exec sh
+    fi
+    mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vda /mnt/persist \
+        || { echo "FATAL: persistent ext4 (/dev/vda) mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
+fi
+
+# Android grows storage.img in place when the user raises the storage size;
+# the ext4 inside still has its old size until it is resized. Online resize is
+# a no-op when nothing changed and must never stop the boot.
+resize2fs /dev/vda >/dev/null 2>&1 \
+    || echo "WARN: resize2fs /dev/vda failed; storage keeps its previous size" > /dev/console
+
+# ===========================================================================
+# v2 新增段：定位、校验、（可选）扩容、挂载 root 分区（§4.1 / §2.1 / §6.5）
+# ===========================================================================
+echo "Mounting system..." > /dev/console
+
+# 1) 等 /dev/vdb。上面的有界等待已同时等两个盘（正常情况下首圈就 break），这里
+#    再兜一次并给出确定性 FATAL：否则后续 dd/od 对缺失的块设备静默读空，会被误判
+#    成"镜像损坏"，误导排障方向。
+for _i in $(seq 1 30); do
+    [ -b /dev/vdb ] && break
+    sleep 0.1
+done
+[ -b /dev/vdb ] \
+    || { echo "FATAL: block device /dev/vdb did not appear (virtio probe timeout)" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
+
+# 2) root 分区的 PARTUUID 只经 cmdline 传进 initramfs（grub.cfg 固定模板，
+#    IMAGE-FORMAT-v2 §2.4）。initramfs 没有 udev → 没有 /dev/disk/by-partuuid
+#    软链，因此按固定序直接用 /dev/vdb3（root 恒为第 3 分区），把 GUID 当作
+#    "防错盘"的校验值：盘序颠倒/换错盘时宁可 FATAL，也不把 ext4 挂到别的分区上。
+root_partuuid=$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^vmd\.root_partuuid=//p' | head -n 1)
+[ -n "$root_partuuid" ] \
+    || { echo "FATAL: vmd.root_partuuid missing from cmdline; not a v2 image (needs mkdisk.sh grub.cfg template, IMAGE-FORMAT-v2 §2.4)" > /dev/console; exec sh; }
+root_partuuid=$(printf '%s' "$root_partuuid" | tr 'A-F' 'a-f')
+
+# 3) 从 GPT 手读表项 3 的 unique GUID 与 cmdline 比对。
+#    表项数组 = LBA2 起 128×128B（§2.1）；第 3 个表项 = 1024 + 2*128，unique GUID
+#    在表项 +16 → 绝对偏移 1296，即 LBA2 扇区内偏移 272，16 字节。
+#    只读一个 512B 扇区再取字节：initramfs 里 od/awk/tr/head 都在（od、awk 是
+#    busybox applet，usr/bin/od、usr/bin/awk -> /bin/busybox），无需 hexdump/xxd。
+guid_hex=$(dd if=/dev/vdb bs=512 skip=2 count=1 2>/dev/null \
+         | od -An -tx1 -j 272 -N 16 \
+         | tr -d ' \n')
+# GPT 的 unique GUID 是 mixed-endian（前 4B、次 2B、再 2B 各自小端，末 8B 原样，
+# §2.2），与 cmdline 的 "8-4-4-4-12" 规范写法比对前必须先按此规则还原。
+guid_norm=$(printf '%s' "$guid_hex" | awk '{
+  a = substr($0,7,2)  substr($0,5,2)  substr($0,3,2)  substr($0,1,2)   # b0-b3 小端
+  b = substr($0,11,2) substr($0,9,2)                                    # b4-b5 小端
+  c = substr($0,15,2) substr($0,13,2)                                   # b6-b7 小端
+  d = substr($0,17,4)                                                   # b8-b9
+  e = substr($0,21,4) substr($0,25,8)                                   # b10-b15
+  printf "%s-%s-%s-%s-%s", a, b, c, d, e
+}' | tr 'A-F' 'a-f')
+if [ -z "$guid_hex" ] || [ "$guid_norm" != "$root_partuuid" ]; then
+    echo "FATAL: root PARTUUID mismatch (cmdline=$root_partuuid gpt_entry3=$guid_norm); refusing to mount the wrong disk" > /dev/console
+    exec sh
+fi
+echo "[podroid-init] root partuuid verified ($guid_norm)" > /dev/console
+
+# 4) 健康检查：p2 (meta) 头 8 字节应为 "VMDIMG02"（§3）。GPT 读得到却读不到这个
+#    魔数 = 镜像被截断/损坏/不是 v2 盘，必须在挂 root 前拦下。
+#    用 hex 比对而非字符串比对：避开 shell 命令替换丢弃二进制 NUL 的坑。
+#    （p2 起点 = LBA 526336 = 257MiB，用 bs=1M skip=257，免得 bs=512 skip 读 265MiB。）
+meta_magic_hex=$(dd if=/dev/vdb bs=1M skip=257 count=1 2>/dev/null \
+               | od -An -tx1 -N 8 | tr -d ' \n')
+[ "$meta_magic_hex" = "564d44494d473032" ] \
+    || { echo "FATAL: meta magic (VMDIMG02) not found at p2 (got '$meta_magic_hex'); image corrupt or not a v2 image" > /dev/console; exec sh; }
+
+# 5) 根分区扩容（§6.5）：宿主在停机期把 .img 文件拉长（稀疏追加），但 GPT 备份表
+#    仍留在旧末尾（"文件末 33 扇区"：LBA last-32..last-1 备份表项、last 备份
+#    header）。主 header 的 alternate_lba 指向备份 header，所以
+#    gpt_end = (alternate_lba+1)*512 就是"分区表认为的盘尾"；块设备实际更大 ⇒
+#    镜像已被宿主扩容，需要把 GPT 与 root 分区吃到新盘尾。
+#    读不到 header/尺寸时一律跳过（扩容失败绝不能挡启动，同 v1 resize2fs 的态度）。
+dev=$(blockdev --getsize64 /dev/vdb 2>/dev/null) || dev=0
+# alternate_lba 在 header 偏移 32，u64 LE（header 本身在 LBA1）。
+alt_lba=$(dd if=/dev/vdb bs=512 skip=1 count=1 2>/dev/null \
+        | od -An -tx1 -j 32 -N 8 \
+        | tr -s ' \n' ' ' \
+        | awk 'function h2d(s,   i,c,d,v) { v=0; for (i=1;i<=length(s);i++) { c=tolower(substr(s,i,1)); d=index("0123456789abcdef",c)-1; if (d<0) return -1; v=v*16+d } return v }
+               { v=0; for (i=8;i>=1;i--) v = v*256 + h2d($i); printf "%d\n", v }')
+if [ -n "$alt_lba" ] && [ "$alt_lba" -gt 0 ] 2>/dev/null && [ "$dev" -gt 0 ] 2>/dev/null; then
+    gpt_end=$(( (alt_lba + 1) * 512 ))
+    if [ "$dev" -gt "$gpt_end" ]; then
+        echo "[podroid-init] disk grown: size=$dev gpt_end=$gpt_end; expanding GPT + root" > /dev/console
+        if command -v sfdisk >/dev/null 2>&1; then
+            # 备份表还在旧末尾：sgdisk -e 先把它搬到新盘尾。本 initramfs 只带
+            # sfdisk 不带 sgdisk（实测 initrd 内无 sgdisk）——缺 sgdisk 时打 WARN
+            # 继续：下面的 sfdisk 按设备实际大小重写整张 GPT，备份表会自然落到新
+            # 盘尾，等价于 -e + -N 3 两步的结果。
+            if command -v sgdisk >/dev/null 2>&1; then
+                sgdisk -e /dev/vdb > /dev/console 2>&1 \
+                    || echo "WARN: sgdisk -e failed; relying on sfdisk to relocate the backup GPT" > /dev/console
+            else
+                echo "WARN: sgdisk not in initramfs; sfdisk below rewrites the GPT and relocates the backup table" > /dev/console
+            fi
+            # root 是最后分区，末尾吃满新空间：',+' = 起始不变、大小到盘尾。
+            # ★ 内核分区表刷新是关键（2026-10-12 grown 用例实测修复）：--no-reread 下
+            #   /dev/vdb3 的内核视图仍是旧尺寸 → resize2fs 必失败。先尝试带 reread 的
+            #   写入（此刻 vdb 各分区尚未挂载，BLKRRPART 应能成功），失败再退
+            #   --no-reread + blockdev --rereadpt；仍不生效则跳过（扩容失败绝不挡启动）。
+            old_vdb3=$(blockdev --getsize64 /dev/vdb3 2>/dev/null || echo 0)
+            if printf ',+\n' | sfdisk -N 3 /dev/vdb > /dev/console 2>&1 \
+               || { printf ',+\n' | sfdisk --no-reread -N 3 /dev/vdb > /dev/console 2>&1 \
+                    && blockdev --rereadpt /dev/vdb > /dev/console 2>&1; }; then
+                new_vdb3=$(blockdev --getsize64 /dev/vdb3 2>/dev/null || echo 0)
+                # ★ R7 回写（2026-10-12，I 线 E2E + mkdisk 复检共同发现）：宿主 setLength 后
+                #   meta.file_size（u64 LE @ p2+16）与 meta.root_size（u64 LE @ p2+80，root
+                #   分区范围）双双陈旧，而读取方以 file_size==实际大小、root_size==分区表
+                #   为合法性判据（IMAGE-FORMAT-v2 §3/§5）——不回写则扩容后 codec 读取
+                #   永久 CORRUPT。meta 分区在 root 之前，扩容不移动它 → 原位 8 字节写安全。
+                #   写失败不挡启动（WARN）。
+                write_meta_u64() {  # $1=字段偏移(十进制) $2=值(十进制)
+                    hx=""; m=$2; j=0
+                    while [ "$j" -lt 8 ]; do
+                        hx="$hx\\$(printf '%03o' $(( m & 255 )))"
+                        m=$(( (m >> 8) & 0x7FFFFFFFFFFFFFFF ))
+                        j=$((j+1))
+                    done
+                    printf "$hx" > /tmp/meta-fs.bin \
+                      && dd if=/tmp/meta-fs.bin of=/dev/vdb bs=1 seek=$(( 269484032 + $1 )) conv=notrunc >/dev/null 2>&1
+                }
+                if write_meta_u64 16 "$dev" && write_meta_u64 80 "$new_vdb3"; then
+                    echo "Root meta updated (file_size=$dev, root_size=$new_vdb3)." > /dev/console
+                else
+                    echo "WARN: meta write-back failed; codec read may reject after growth" > /dev/console
+                fi
+                if [ "$new_vdb3" -gt "$old_vdb3" ] 2>/dev/null; then
+                    if resize2fs /dev/vdb3 > /dev/console 2>&1; then
+                        echo "Root filesystem expanded." > /dev/console
+                    else
+                        echo "WARN: resize2fs /dev/vdb3 failed; root keeps its previous size" > /dev/console
+                    fi
+                else
+                    echo "WARN: kernel still sees old /dev/vdb3 size ($new_vdb3 <= $old_vdb3); skipping resize2fs" > /dev/console
+                fi
+            else
+                echo "WARN: sfdisk -N 3 failed; root keeps its previous size" > /dev/console
+            fi
+        else
+            echo "WARN: neither sfdisk nor sgdisk in initramfs; skipping root expansion (DESIGN-disk-image-v2 §6.5)" > /dev/console
+        fi
+    fi
+else
+    echo "WARN: could not read GPT backup location; skipping root expansion" > /dev/console
+fi
+
+# 6) 挂 root。e2fsck 退出码语义与上面 vda 分支同款（0 干净、1/2 已修复、4 未修复、
+#    >=8 不可用/操作错），但**绝不自动 mkfs**：vda 是用户数据盘（全零 = 全新才允许
+#    格式化），root 是系统盘 —— 损坏必须 FATAL、静默重置系统等于把用户的机器变砖
+#    （DESIGN §4.1）。挂载选项同 vda 段注释（noatime/commit=1/barrier=1）。
+rc=0
+e2fsck -y /dev/vdb3 > /dev/console 2>&1 || rc=$?
+if [ "$rc" -ge 4 ]; then
+    echo "FATAL: root ext4 (/dev/vdb3) could not be repaired (e2fsck rc=$rc); refusing to reformat the system partition" > /dev/console
+    ls -l /dev/vd* > /dev/console 2>&1
+    exec sh
+fi
+mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vdb3 /mnt/root \
+    || { echo "FATAL: root ext4 (/dev/vdb3) mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
+echo "[podroid-init] mounted root (/dev/vdb3 -> /mnt/root)" > /dev/console
+
+# 7) /home 归属 vda（§4.3）：v1 里家目录靠 overlay upper 落在 storage.img，换镜像
+#    不丢；v2 系统改动直接写 root 分区，家目录若跟着 root，"重装系统"会连家目录
+#    一起抹掉（相对 v1 是倒退）。所以首启把 rootfs 的 /etc/skel 种进 storage.img
+#    的 /home —— 一次性首启种子，已有内容一律不动。
+mkdir -p /mnt/persist/home
+if [ -z "$(ls -A /mnt/persist/home 2>/dev/null)" ] && [ -d /mnt/root/etc/skel ]; then
+    echo "[podroid-init] seeding /home from /etc/skel (first boot)" > /dev/console
+    cp -a /mnt/root/etc/skel/. /mnt/persist/home/ \
+        || echo "WARN: skel seed failed; /home starts empty" > /dev/console
+fi
+
+# 8) 把 /mnt/root 变成新根（沿用 v1 的 mount --move 序列；v1 的 /mnt/lower 段随
+#    overlay 一起删除）。persist 挪进新根，switch_root 清理 initramfs 时才不会有
+#    孤儿挂载挡住它的 unlink 流程（与 v1 同款理由）。
+mkdir -p /mnt/root/mnt/persist \
+    || { echo "FATAL: mkdir /mnt/root/mnt/persist failed" > /dev/console; exec sh; }
+mount --move /mnt/persist /mnt/root/mnt/persist \
+    || { echo "FATAL: mount --move /mnt/persist failed" > /dev/console; exec sh; }
+
+# Move our early mounts into the new root so OpenRC inherits them
+mount --move /proc /mnt/root/proc \
+    || { echo "FATAL: mount --move /proc failed" > /dev/console; exec sh; }
+mount --move /sys  /mnt/root/sys \
+    || { echo "FATAL: mount --move /sys failed" > /dev/console; exec sh; }
+mount --move /dev  /mnt/root/dev \
+    || { echo "FATAL: mount --move /dev failed" > /dev/console; exec sh; }
+
+# 9) /home bind 到 vda（§4.3）。必须在 switch_root 之前做（systemd/OpenRC 起来前
+#    家目录就已就绪，与 v1 overlay 落位时机等价）。源路径用 persist 被搬进来之后的
+#    新位置：/mnt/persist 已经不存在了。rootfs 自带的 /home 内容不删（留在盘上做
+#    兜底），只是被 vda 的家目录盖在挂载点上，故这里只 WARN。
+mkdir -p /mnt/root/home
+if [ -n "$(ls -A /mnt/root/home 2>/dev/null)" ]; then
+    echo "WARN: rootfs /home is not empty; keeping it on-disk as fallback, vda /home owns the mount point" > /dev/console
+fi
+mount --bind /mnt/root/mnt/persist/home /mnt/root/home \
+    || { echo "FATAL: mount --bind /home (from vda /mnt/persist/home) failed" > /dev/console; exec sh; }
+echo "[podroid-init] /home bound to vda (storage.img)" > /dev/console
+
+echo "[podroid-init] switching to real root" > /dev/console
+exec /sbin/switch_root /mnt/root /sbin/init

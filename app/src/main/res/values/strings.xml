@@ -20,6 +20,11 @@
     <string name="stopping_vm">Stopping the VM…</string>
     <string name="stopping_action">Stopping…</string>
 
+    <!-- §7.1 启动过程可视化：启动状态区的日志尾巴（阶段标签之外的"明细"语义） -->
+    <string name="boot_log_live">Boot log · live</string>
+    <string name="boot_log_summary_ok">Boot complete · %1$d lines</string>
+    <string name="boot_log_summary_last">Last boot · %1$d lines</string>
+
     <!-- Network -->
     <string name="network">Network</string>
     <string name="phone_ip">Phone IP</string>
@@ -413,6 +418,12 @@
     <string name="images_catalog_error">Couldn\'t load the image catalog: %1$s</string>
     <string name="images_catalog_malformed">Malformed image catalog</string>
     <string name="images_catalog_sig_invalid">Image catalog signature invalid</string>
+    <!-- catalog schema v2 (IMAGE-FORMAT-v2 §7.2 / DESIGN-disk-image-v2 §9)：
+         schema<2 = 旧目录被拒（目录需要更新应用版本语义）；schema>2 = 目录比应用新。
+         两键均为新增，待 ui/ 侧把 CatalogException.Reason.MALFORMED 的 message 接上（本工位不改 ui/）。 -->
+    <string name="images_catalog_schema_old">Image catalog is out of date — the catalog needs updating for this app version</string>
+    <string name="images_catalog_schema_new">Image catalog is newer than this app — please update the app</string>
+    <string name="images_download_install_space">Not enough storage to download and install</string>
     <string name="images_eta">%1$s left</string>
     <string name="images_remove_confirm_title">Remove image?</string>
     <string name="images_remove_confirm_body">This deletes %1$s and its verification record.</string>
@@ -423,5 +434,36 @@
     <string name="images_factory_done">Storage wiped — takes effect on next start</string>
     <string name="images_err_storage_full">Not enough storage to download</string>
     <string name="images_stop_vm_first">Stop the VM first</string>
+    <!-- M3 wrap-up (DESIGN-disk-image-v2): v1 legacy-format image badge (§10) -->
+    <string name="images_legacy_badge">Legacy format</string>
+    <string name="images_legacy_hint">This is a v1 legacy image — it can no longer be booted. Remove it and download a v2 image.</string>
+    <string name="images_legacy_remove">Remove legacy image</string>
+    <!-- M3 wrap-up: dirty badge (§5.4 — guest already wrote to the system disk, contents unverifiable) -->
+    <string name="images_dirty_badge">Modified</string>
+    <string name="images_dirty_hint">The system disk has been modified inside the VM, so its contents can\'t be verified. Reinstall the system to return to factory state.</string>
+    <!-- M3 wrap-up: installer cache management (§6.4 — deleting gives up offline reinstallation) -->
+    <string name="images_cache_section">Download cache</string>
+    <string name="images_cache_hint">Keeps each downloaded .img.zst for offline reinstallation (Factory reset → Reinstall system). Deleting a cache file means re-downloading it to reinstall.</string>
+    <string name="images_cache_empty">No cached installers</string>
+    <string name="images_cache_scanning">Scanning cache…</string>
+    <string name="images_cache_total">Footprint: %1$s</string>
+    <string name="images_cache_footprint">Footprint %1$s</string>
+    <string name="images_cache_delete">Delete</string>
+    <string name="images_cache_delete_all">Delete all</string>
+    <string name="images_cache_delete_confirm_title">Delete cached installer?</string>
+    <string name="images_cache_delete_confirm_body">Deleting %1$s means this system can\'t be reinstalled offline — you\'ll need to download it again.</string>
+    <string name="images_cache_delete_all_confirm_body">Deleting all cached installers means no system can be reinstalled offline — you\'ll need to download them again.</string>
+    <string name="images_cache_removed">Deleted %1$s</string>
+    <string name="images_cache_removed_all">All cached installers deleted</string>
+    <string name="images_cache_nothing">Nothing to delete</string>
+    <!-- M3 wrap-up: system disk size tiers (§6.5 — grown while stopped, guest expands on next boot) -->
+    <string name="system_disk_label">System disk size</string>
+    <string name="system_disk_grow_hint">Larger sizes take effect on the next start — the guest then expands the partition and the filesystem. Size can only be increased, never reduced.</string>
+    <string name="system_disk_grow_done">System disk set to %1$s GB — expands automatically on next start (the guest grows the partition and the filesystem)</string>
+    <string name="system_disk_no_image_hint">No bootable system image installed — nothing to expand.</string>
+    <string name="system_disk_legacy_hint">The active image uses the legacy v1 format — remove it on the System images page and install a v2 image first.</string>
+    <string name="system_disk_pending_grow_hint">Already enlarged — the guest expands the partition and the filesystem on the next start.</string>
+    <string name="system_disk_max_hint">This is the largest size available (32 GB).</string>
+    <string name="system_disk_growing">Expanding…</string>
     <string name="settings_downloads_wifi_only">Download over Wi-Fi only</string>
 </resources>

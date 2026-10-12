@@ -35,6 +35,13 @@ import java.io.File
  * | 9 | `accounts.ssh_port != 22` | SSH_PORT_INVALID |
  * | 10 | 激活时 identity/contract/init 判据不通过 | RESET_REQUIRED |
  * | 11 | `storage.img` 缺失 | （**非拒绝**：`ensureStorageImage()` 正常创建） |
+ * | 12 | v1 旧格式镜像（尾 `VMDIMG01` / 裸 `hsqs`；DESIGN-disk-image-v2 §5.3 诊断阶梯） | LEGACY_FORMAT |
+ *
+ * 12 = M3（DESIGN-disk-image-v2 §6.2/§7）新增，**追加在枚举末尾**（既有顺序不动，
+ * `image.log` 的 `bootguard_reject.reason` 取值只增不改）。`VmdDiskReason.LEGACY_FORMAT`
+ * → 本枚举的映射在 SystemImageFormat.kt（`VmdDiskReason.toBootGuard()`），经
+ * `ActivationCheck.Rejected.guard` 传入本类；本文件不 import v2 codec ——
+ * `systemimage-selftest/README.md` §2 的 kotlinc 命令不编译 `VmdDiskCodec.kt`。
  */
 enum class BootGuardReason {
     NO_SYSTEM_IMAGE,
@@ -46,7 +53,9 @@ enum class BootGuardReason {
     IMAGE_ID_INVALID,
     SSH_CAPABILITY_MISSING,
     SSH_PORT_INVALID,
-    RESET_REQUIRED;
+    RESET_REQUIRED,
+    /** v1 旧格式镜像（"请重新获取 v2 镜像"；§5.3 诊断阶梯 / §8 兼容矩阵）。 */
+    LEGACY_FORMAT;
 
     /** 写 `image.log` 用（= 枚举名；与 §7.4 表逐字一致）。 */
     val reasonName: String get() = name
@@ -116,7 +125,7 @@ class BootGuard(
         }
         return when (val check = store.checkActivation(active.imageId)) {
             is SystemImageStore.ActivationCheck.Rejected -> BootGuardVerdict.reject(
-                reasonOf(check.reason),
+                check.guard ?: reasonOf(check.reason),
                 check.detail,
                 storagePresent,
             )
@@ -151,7 +160,7 @@ class BootGuard(
         }
         return when (val check = store.checkActivation(imageId)) {
             is SystemImageStore.ActivationCheck.Rejected -> BootGuardVerdict.reject(
-                reasonOf(check.reason),
+                check.guard ?: reasonOf(check.reason),
                 check.detail,
                 storagePresent,
             )
@@ -178,18 +187,28 @@ class BootGuard(
         "storage_present" to verdict.storagePresent,
     )
 
-    private fun reasonOf(reason: VmdImageReason): BootGuardReason = when (reason.bootGuard) {
-        "NO_SYSTEM_IMAGE" -> BootGuardReason.NO_SYSTEM_IMAGE
-        "CORRUPT" -> BootGuardReason.CORRUPT
-        "NOT_AN_IMAGE" -> BootGuardReason.NOT_AN_IMAGE
-        "FORMAT_UNSUPPORTED" -> BootGuardReason.FORMAT_UNSUPPORTED
-        "APP_TOO_OLD" -> BootGuardReason.APP_TOO_OLD
-        "ARCH_MISMATCH" -> BootGuardReason.ARCH_MISMATCH
-        "IMAGE_ID_INVALID" -> BootGuardReason.IMAGE_ID_INVALID
-        "SSH_CAPABILITY_MISSING" -> BootGuardReason.SSH_CAPABILITY_MISSING
-        "SSH_PORT_INVALID" -> BootGuardReason.SSH_PORT_INVALID
-        "RESET_REQUIRED" -> BootGuardReason.RESET_REQUIRED
-        // codec 细分码没有独立的 §7.4 条目（截断/段损坏/IO）→ #2 CORRUPT
-        else -> BootGuardReason.CORRUPT
-    }
+    private fun reasonOf(reason: VmdImageReason): BootGuardReason = bootGuardReasonOf(reason.bootGuard) ?: BootGuardReason.CORRUPT
+}
+
+/**
+ * codec 细分码字符串 → §7.4 权威 [BootGuardReason]（**唯一字符串映射表**）。
+ *
+ * 覆盖：v1 `VmdImageReason.bootGuard` 全集 + M3 新增的 `LEGACY_FORMAT`
+ * （v2 `VmdDiskReason.LEGACY_FORMAT` 经 SystemImageFormat.kt 的 `toBootGuard()`
+ * 落成 [ActivationCheck][SystemImageStore.ActivationCheck.Rejected.guard] 后在此兜底可回查）。
+ * 未知字符串 → null（调用方按 #2 `CORRUPT` 保守处理）。
+ */
+fun bootGuardReasonOf(name: String?): BootGuardReason? = when (name) {
+    "NO_SYSTEM_IMAGE" -> BootGuardReason.NO_SYSTEM_IMAGE
+    "CORRUPT" -> BootGuardReason.CORRUPT
+    "NOT_AN_IMAGE" -> BootGuardReason.NOT_AN_IMAGE
+    "FORMAT_UNSUPPORTED" -> BootGuardReason.FORMAT_UNSUPPORTED
+    "APP_TOO_OLD" -> BootGuardReason.APP_TOO_OLD
+    "ARCH_MISMATCH" -> BootGuardReason.ARCH_MISMATCH
+    "IMAGE_ID_INVALID" -> BootGuardReason.IMAGE_ID_INVALID
+    "SSH_CAPABILITY_MISSING" -> BootGuardReason.SSH_CAPABILITY_MISSING
+    "SSH_PORT_INVALID" -> BootGuardReason.SSH_PORT_INVALID
+    "RESET_REQUIRED" -> BootGuardReason.RESET_REQUIRED
+    "LEGACY_FORMAT" -> BootGuardReason.LEGACY_FORMAT
+    else -> null
 }

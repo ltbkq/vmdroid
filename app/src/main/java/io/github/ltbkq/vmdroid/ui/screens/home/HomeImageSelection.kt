@@ -31,6 +31,10 @@ data class ImageRowUi(
     val active: Boolean,
     /** manifest `image.system_version`（§8.3 卡片版本行；缺失不显示段落）。 */
     val systemVersion: Long? = null,
+    /** §10 v1 旧格式镜像（`VmdDiskProbe.isV2Image == false`；BootGuard 拒启，UI 只展示+清理）。 */
+    val legacy: Boolean = false,
+    /** §5.4 `state=dirty`（guest 已写入系统盘 → 内容无法校验；重装系统可回原厂）。 */
+    val dirty: Boolean = false,
 ) {
     /** 行首：`Debian 13 (trixie) · 最小化`（无变体时只有名称）。 */
     val line1: String = buildString {
@@ -144,6 +148,10 @@ fun buildImageRow(
     activeId: String?,
     corrupt: Boolean = false,
     systemVersion: Long? = null,
+    /** §10 v1 旧格式（`VmdDiskProbe.isV2Image == false`；BootGuard 拒启，UI 只展示+清理）。 */
+    legacy: Boolean = false,
+    /** §5.4 `state=dirty`（guest 已写入系统盘 → 内容无法校验；重装系统可回原厂）。 */
+    dirty: Boolean = false,
 ): ImageRowUi = ImageRowUi(
     imageId = imageId,
     displayName = displayName ?: imageId,
@@ -153,6 +161,8 @@ fun buildImageRow(
     corrupt = corrupt,
     active = imageId == activeId,
     systemVersion = systemVersion,
+    legacy = legacy,
+    dirty = dirty,
 )
 
 /**
@@ -163,4 +173,4 @@ fun buildImageRow(
  * FIXLIST ISSUE-01：镜像实际发布在 `ltbkq/vmdroid` 的镜像 Release（catalog.json
  * 也发在这里，与资产同处），原 Podroid-Debian 链接 404。
  */
-const val CATALOG_RELEASES_URL = "https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08"
+const val CATALOG_RELEASES_URL = "https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12"

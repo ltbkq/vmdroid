@@ -12,14 +12,24 @@ import java.security.spec.ECGenParameterSpec
 import java.util.Base64
 
 /**
- * §6.1 catalog 解析 + ECDSA P-256 detached 签名单测（纯 JVM）。
- * 固定向量 = §13.1「固定 key+message+sig 入库」的正例锚点。
+ * §6.1 catalog 解析（schema v2：`schema:2` + `assets[]` + `.img.zst` 双摘要）+
+ * ECDSA P-256 detached 签名单测（纯 JVM）。
+ * 固定向量 = §13.1「固定 key+message+sig 入库」的正例锚点（签名机制与 schema 版本无关）。
  */
 class ImageCatalogTest {
 
     companion object {
-        /** §13.1 固定向量：被签名的原始字节（UTF-8）。 */
-        private const val SIGNED_CONTENT = """{"schema":1,"generated_at":"2026-10-07T12:00:00Z","images":[]}"""
+        /**
+         * §13.1 固定向量：入库签名所用的原始字节（UTF-8）。签名对象 = 产物原始字节、
+         * 无规范化（IMAGE-FORMAT-v2 §7.2：两 schema 同一机制、同一私钥）—— 本向量是
+         * 与 catalog schema 版本无关的密码学锚点，保留作正例互操作断言。
+         */
+        private const val FIXED_VECTOR_BYTES =
+            """{"schema":1,"generated_at":"2026-10-07T12:00:00Z","images":[]}"""
+
+        /** schema2 目录字节串（v2 产物口径）：与固定向量签名内容不同 → 同一 sig 必须验签失败。 */
+        private const val SIGNED_CONTENT =
+            """{"schema":2,"generated_at":"2026-10-07T12:00:00Z","assets":[]}"""
 
         /** 固定 P-256 公钥（X.509/SPKI PEM；私钥仅存在于生成时，不入库）。 */
         private const val FIXED_PEM = """-----BEGIN PUBLIC KEY-----
@@ -36,9 +46,9 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
 
     private val validCatalog = """
         {
-          "schema": 1,
+          "schema": 2,
           "generated_at": "2026-10-07T12:00:00Z",
-          "images": [
+          "assets": [
             {
               "image_id": "debian-minimal-arm64",
               "display_name": "Debian 13 (trixie) · 最小化",
@@ -48,11 +58,29 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
               "system_version": 34,
               "arch": "arm64",
               "channel": "stable",
-              "url": "https://github.com/ltbkq/Podroid-Debian/releases/download/v34/debian.img",
-              "size": 148951040,
-              "sha256": "d0f7d5dfbde47ba54d9a49082ff75b6b6d52989e898fb92631139416911e59b7",
+              "url": "https://github.com/ltbkq/Podroid-Debian/releases/download/v34/debian.img.zst",
+              "size": 39318048,
+              "sha256": "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00",
+              "image_size": 148951040,
+              "image_sha256": "d0f7d5dfbde47ba54d9a49082ff75b6b6d52989e898fb92631139416911e59b7",
               "app_min_version_code": 3,
               "notes": "最小化：systemd + dropbear"
+            }
+          ]
+        }
+    """.trimIndent()
+
+    /** 旧 v1 目录（`schema:1` + `images[]` + `.img` 直链）—— DESIGN §9：必须整体拒载。 */
+    private val schema1LegacyCatalog = """
+        {
+          "schema": 1,
+          "generated_at": "2026-10-07T12:00:00Z",
+          "images": [
+            {
+              "image_id": "debian-minimal-arm64",
+              "url": "https://github.com/ltbkq/Podroid-Debian/releases/download/v34/debian.img",
+              "size": 148951040,
+              "sha256": "d0f7d5dfbde47ba54d9a49082ff75b6b6d52989e898fb92631139416911e59b7"
             }
           ]
         }
@@ -61,16 +89,18 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
     private fun entryJson(modify: (MutableMap<String, Any?>) -> Unit = {}): String {
         val m = linkedMapOf<String, Any?>(
             "image_id" to "debian-minimal-arm64",
-            "url" to "https://example.com/debian.img",
-            "size" to 1056768L,
-            "sha256" to "d0f7d5dfbde47ba54d9a49082ff75b6b6d52989e898fb92631139416911e59b7",
+            "url" to "https://example.com/debian.img.zst",
+            "size" to 66490L,
+            "sha256" to "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00",
+            "image_size" to 1056768L,
+            "image_sha256" to "d0f7d5dfbde47ba54d9a49082ff75b6b6d52989e898fb92631139416911e59b7",
         )
         modify(m)
         return MiniJson.write(m)
     }
 
     private fun catalogWith(vararg entries: String): String =
-        """{"schema":1,"images":[${entries.joinToString(",")}]}"""
+        """{"schema":2,"assets":[${entries.joinToString(",")}]}"""
 
     private fun assertRejects(catalog: String, reason: CatalogException.Reason) {
         val e = assertThrows(CatalogException::class.java) { ImageCatalog.parse(catalog) }
@@ -90,11 +120,21 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
         assertEquals(34L, e.systemVersion)
         assertEquals("arm64", e.arch)
         assertEquals("stable", e.channel)
-        assertEquals("https://github.com/ltbkq/Podroid-Debian/releases/download/v34/debian.img", e.url)
-        assertEquals(148951040L, e.size)
-        assertEquals("d0f7d5dfbde47ba54d9a49082ff75b6b6d52989e898fb92631139416911e59b7", e.sha256)
+        assertEquals("https://github.com/ltbkq/Podroid-Debian/releases/download/v34/debian.img.zst", e.url)
+        assertEquals(39318048L, e.size)
+        assertEquals("a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00", e.sha256)
+        assertEquals(148951040L, e.imageSize)
+        assertEquals("d0f7d5dfbde47ba54d9a49082ff75b6b6d52989e898fb92631139416911e59b7", e.imageSha256)
         assertEquals(3L, e.appMinVersionCode)
         assertEquals("最小化：systemd + dropbear", e.notes)
+        // install 显式交接的展示字段快照（DESIGN-disk-image-v2 §6.1 display 部分）
+        val display = e.display()
+        assertEquals("Debian 13 (trixie) · 最小化", display.displayName)
+        assertEquals("debian:trixie", display.identity)
+        assertEquals("minimal", display.variant)
+        assertEquals("2026.10.0-r1", display.version)
+        assertEquals("stable", display.channel)
+        assertEquals("最小化：systemd + dropbear", display.notes)
     }
 
     @Test
@@ -106,8 +146,11 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
     @Test
     fun parse_shaUppercaseIsNormalizedToLowercase() {
         val upper = "D0F7D5DFBDE47BA54D9A49082FF75B6B6D52989E898FB92631139416911E59B7"
-        val entries = ImageCatalog.parse(catalogWith(entryJson { it["sha256"] = upper }))
+        val entries = ImageCatalog.parse(
+            catalogWith(entryJson { it["sha256"] = upper; it["image_sha256"] = upper }),
+        )
         assertEquals(upper.lowercase(), entries[0].sha256)
+        assertEquals(upper.lowercase(), entries[0].imageSha256)
     }
 
     @Test
@@ -125,12 +168,14 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
 
     @Test
     fun parse_schemaMissingOrUnknown_isMalformed() {
-        assertRejects("""{"images":[]}""", CatalogException.Reason.MALFORMED)
-        assertRejects("""{"schema":2,"images":[]}""", CatalogException.Reason.MALFORMED)
-        assertRejects("""{"schema":1}""", CatalogException.Reason.MALFORMED)
-        assertRejects("""{"schema":1,"images":{}}""", CatalogException.Reason.MALFORMED)
+        assertRejects("""{"assets":[]}""", CatalogException.Reason.MALFORMED) // schema 缺失
+        assertRejects("""{"schema":1,"assets":[]}""", CatalogException.Reason.MALFORMED) // 旧目录被拒（DESIGN §9）
+        assertRejects(schema1LegacyCatalog, CatalogException.Reason.MALFORMED) // 完整 v1 目录同样拒载
+        assertRejects("""{"schema":3,"assets":[]}""", CatalogException.Reason.MALFORMED) // 目录比应用新
+        assertRejects("""{"schema":2}""", CatalogException.Reason.MALFORMED) // assets 缺失
+        assertRejects("""{"schema":2,"assets":{}}""", CatalogException.Reason.MALFORMED)
         assertRejects("not json at all {", CatalogException.Reason.MALFORMED)
-        assertRejects("""[{"schema":1}]""", CatalogException.Reason.MALFORMED)
+        assertRejects("""[{"schema":2}]""", CatalogException.Reason.MALFORMED)
     }
 
     @Test
@@ -154,6 +199,17 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
         assertRejects(catalogWith(entryJson { it.remove("size") }), CatalogException.Reason.BAD_ENTRY)
         assertRejects(catalogWith(entryJson { it["url"] = "" }), CatalogException.Reason.BAD_ENTRY)
         assertRejects(catalogWith(entryJson { it.remove("url") }), CatalogException.Reason.BAD_ENTRY)
+        // §7.2：v2 分发容器只有 .img.zst —— 旧 .img 直链整体拒绝
+        assertRejects(
+            catalogWith(entryJson { it["url"] = "https://example.com/debian.img" }),
+            CatalogException.Reason.BAD_ENTRY,
+        )
+        // 双摘要语义：image_size / image_sha256（对 .img）同样严格
+        assertRejects(catalogWith(entryJson { it["image_sha256"] = "abc" }), CatalogException.Reason.BAD_ENTRY)
+        assertRejects(catalogWith(entryJson { it.remove("image_sha256") }), CatalogException.Reason.BAD_ENTRY)
+        assertRejects(catalogWith(entryJson { it["image_size"] = 0L }), CatalogException.Reason.BAD_ENTRY)
+        assertRejects(catalogWith(entryJson { it["image_size"] = -5L }), CatalogException.Reason.BAD_ENTRY)
+        assertRejects(catalogWith(entryJson { it.remove("image_size") }), CatalogException.Reason.BAD_ENTRY)
     }
 
     @Test
@@ -171,15 +227,17 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEng2f4SRlzmGG6rb2wuukV6AVMXFf
     @Test
     fun signature_fixedVectorVerifies() {
         assertTrue(
-            ImageCatalog.verifySignature(FIXED_PEM, FIXED_SIG, SIGNED_CONTENT.toByteArray()),
+            ImageCatalog.verifySignature(FIXED_PEM, FIXED_SIG, FIXED_VECTOR_BYTES.toByteArray()),
         )
     }
 
     @Test
     fun signature_tamperedContentFails() {
-        val bytes = SIGNED_CONTENT.toByteArray().clone()
+        // 签名对象是原始字节、无规范化：内容变化（含换成 schema2 目录字节串）→ 必须失败
+        val bytes = FIXED_VECTOR_BYTES.toByteArray().clone()
         bytes[1] = 'X'.code.toByte() // 改一个字节
         assertFalse(ImageCatalog.verifySignature(FIXED_PEM, FIXED_SIG, bytes))
+        assertFalse(ImageCatalog.verifySignature(FIXED_PEM, FIXED_SIG, SIGNED_CONTENT.toByteArray()))
         assertFalse(ImageCatalog.verifySignature(FIXED_PEM, FIXED_SIG, "other".toByteArray()))
     }
 

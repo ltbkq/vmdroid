@@ -23,17 +23,20 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,6 +81,66 @@ class HomeViewModel @Inject constructor(
 
     val bootStage: StateFlow<String> = engine.bootStage
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    // ---- §7.1 启动过程可视化：节流派生的启动日志尾巴 ----
+
+    /**
+     * `consoleText` 的普通 Flow 视图。`StateFlow.conflate()` 在 coroutines 1.9 已被
+     * 标为 no-op 弃用（编译期报错），conflate 只对通用 Flow 生效 —— 先上抛成
+     * [Flow]，下面的节流链才能按 §7.1 的语义写。
+     */
+    private val consoleTextSource: Flow<String> = engine.consoleText
+
+    /**
+     * 实时尾巴（≤1500 字符 / 12 行）。`consoleText` 是**每 chunk 一次**的全量
+     * StateFlow，直接 collect 会让启动期每次输出都触发取尾 + 发射 + 重组，
+     * 所以三层收敛后再暴露给 UI：
+     *
+     * 1. `conflate()` —— 上游高频更新只保留最新值，不排队；
+     * 2. `sample(200)` —— 至多 5Hz 才产出一次（stateIn 再合流一次，
+     *    UI 侧每秒最多重组 ~5 次）；
+     * 3. `map(::buildBootLogTail)` —— 取尾（先 takeLast 再按行切），
+     *    MB 级全量串永远不进 UI 层。
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    val bootLogTail: StateFlow<BootLogTail> = consoleTextSource
+        .conflate()
+        .sample(BOOT_LOG_SAMPLE_MS)
+        .map(::buildBootLogTail)
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BootLogTail.EMPTY)
+
+    /**
+     * 最近一次启动的**冻结**尾巴。必须在状态边上现算：QEMU 的
+     * `cleanup()` 会紧跟 Error/stop 清空 `consoleText`，等 UI 慢慢派生就晚了。
+     */
+    private val _lastBootLog = MutableStateFlow(BootLogTail.EMPTY)
+
+    /** 收起态是否被点开（每次新启动重置）。 */
+    private val _bootLogExpanded = MutableStateFlow(false)
+
+    /**
+     * 面板的单一展示模型。状态/实时尾巴/展开态三处来源在这里合成 ——
+     * 分散到 UI 里各取各的会漏掉"离开 Starting 时冻结"这种跨流时机。
+     */
+    val bootLog: StateFlow<BootLogUi> = combine(
+        bootLogTail,
+        _lastBootLog,
+        vmState,
+        _bootLogExpanded,
+    ) { live, last, state, expanded ->
+        if (state is VmState.Starting) {
+            // 启动中：跟随实时尾巴，不给收起入口（阶段标签在上一行并列展示）
+            BootLogUi(tail = live, live = true, collapsed = false, hasLog = !live.isEmpty)
+        } else {
+            // Running/Stopped/Error：收起为一行摘要，点开看最近一次启动的尾巴
+            BootLogUi(tail = last, live = false, collapsed = !expanded, hasLog = !last.isEmpty)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BootLogUi.EMPTY)
+
+    fun toggleBootLog() {
+        _bootLogExpanded.value = !_bootLogExpanded.value
+    }
 
     // Pushed live by the guest over the host bridge (STATS verb), persisted via
     // SettingsRepository.setLastContainerCount and read back here as a Flow -
@@ -219,6 +282,36 @@ class HomeViewModel @Inject constructor(
     init {
         checkForUpdate()
         refreshImages()
+
+        // §7.1 启动日志：在**状态机边上**冻结/重置「最近一次启动」尾巴。
+        // 放 ViewModel 而不是 UI —— Home 页可能被导航离开，快照必须独立于
+        // 组合存活；且引擎（QEMU cleanup）会在 Error/stop 后清空 consoleText，
+        // 慢一拍就只剩空串。
+        viewModelScope.launch {
+            var prev: VmState? = null
+            engine.state.collect { st ->
+                val p = prev
+                when {
+                    // 新一轮启动：清掉上次的冻结尾巴 + 展开标记，面板切回实时跟随
+                    st is VmState.Starting && p !is VmState.Starting -> {
+                        _lastBootLog.value = BootLogTail.EMPTY
+                        _bootLogExpanded.value = false
+                    }
+                    // 离开 Starting：**现算**尾巴（节流可能还差最后一窗，
+                    // 必须保证 "Ready!" / 最后的错误输出进快照）。引擎若已同步
+                    // 清空 consoleText（QEMU：Error 后紧跟 cleanup），退回
+                    // 节流快照 —— 启动期 UI 一直在看，值还留在 stateIn 里。
+                    p is VmState.Starting && st !is VmState.Starting -> {
+                        val raw = engine.consoleText.value
+                        _lastBootLog.value =
+                            if (raw.isNotEmpty()) buildBootLogTail(raw) else bootLogTail.value
+                        // 启动失败：默认展开日志，排障面直接给到眼前
+                        if (st is VmState.Error) _bootLogExpanded.value = true
+                    }
+                }
+                prev = st
+            }
+        }
     }
 
     /** §8.2「运行中禁用」（v1 不做热切换）。 */

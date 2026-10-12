@@ -33,6 +33,7 @@ import io.github.ltbkq.vmdroid.ui.imageErrorMessage
 import io.github.ltbkq.vmdroid.ui.screens.home.ImageRowUi
 import io.github.ltbkq.vmdroid.ui.screens.home.ResetPrompt
 import io.github.ltbkq.vmdroid.ui.screens.home.buildImageRow
+import io.github.ltbkq.vmdroid.ui.screens.home.formatBytes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -53,6 +54,25 @@ sealed interface DownloadRowUi {
     data class Failed(val err: String) : DownloadRowUi
 }
 
+/**
+ * §6.4 缓存行 UI 模型（`cache/<id>.img.zst`）。两个体积并列展示：
+ * [footprintLabel] = 实际占用（`st_blocks×512`，与 HostMetrics 口径一致）、
+ * [apparentLabel] = 表观大小（`.zst` 不稀疏，两者通常相同）。
+ */
+data class CacheRowUi(
+    val imageId: String,
+    val footprintLabel: String,
+    val apparentLabel: String,
+) {
+    /** 行内副标题：占用与表观相同则只显示一个数字。 */
+    val subtitle: String
+        get() = if (footprintLabel == apparentLabel) {
+            footprintLabel
+        } else {
+            "$footprintLabel · $apparentLabel"
+        }
+}
+
 /** §8.3 页面状态。 */
 data class ImagesUiState(
     // ── 已安装（卡片） ──
@@ -62,6 +82,14 @@ data class ImagesUiState(
     val installedFailed: Boolean = false,
     val busyIds: Set<String> = emptySet(), // 激活/校验/删除 spinner
     val verifyingId: String? = null,
+
+    // ── 安装包缓存（§6.4：离线重装的取处，可清理） ──
+    val cacheArchives: List<CacheRowUi> = emptyList(),
+    val cacheTotalDiskBytes: Long = 0L,
+    val cacheLoading: Boolean = false,
+    val deletingCacheIds: Set<String> = emptySet(),
+    val cacheDeletePromptId: String? = null,
+    val cacheDeleteAllPrompt: Boolean = false,
 
     // ── 在线目录（行） ──
     val catalog: List<CatalogEntry>? = null,
@@ -80,6 +108,8 @@ data class ImagesUiState(
     val catalogUrl: String = "",
 ) {
     fun row(id: String): ImageRowUi? = rows.find { it.imageId == id }
+
+    fun cacheRow(id: String): CacheRowUi? = cacheArchives.find { it.imageId == id }
 
     fun markCorrupt(id: String): ImagesUiState =
         copy(rows = rows.map { if (it.imageId == id) it.copy(corrupt = true) else it })
@@ -113,6 +143,7 @@ class ImagesViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(catalogLoading = true, installedLoading = it.rows.isEmpty()) }
             refreshInstalled()
+            refreshCache()
             _state.update {
                 it.copy(
                     wifiBlocked = systemImages.wifiOnlyBlocked(),
@@ -147,6 +178,10 @@ class ImagesViewModel @Inject constructor(
                         // 重拉不擦除既有 CORRUPT 标记（复校治愈）
                         corrupt = prev.row(installed.imageId)?.corrupt == true,
                         systemVersion = image?.systemVersion,
+                        // §10 v1 旧格式：3×512B 快检（不跑 codec）；§5.4 dirty：meta state
+                        legacy = runCatching { systemImages.isLegacyImage(installed.imageId) }
+                            .getOrDefault(false),
+                        dirty = installed.meta?.state == SystemImageStore.STATE_DIRTY,
                     )
                 }
                 list to active
@@ -159,6 +194,102 @@ class ImagesViewModel @Inject constructor(
             Log.w(TAG, "listing installed images failed", t)
             // §8.2 同款「保留上次值 + inline error」
             _state.update { it.copy(installedLoading = false, installedFailed = true) }
+        }
+    }
+
+    // ---------------------------------------------------------------- 缓存（§6.4 安装包）
+
+    /**
+     * §6.4 缓存列举：`cache/<id>.img.zst` + 总实际占用（`st_blocks×512`）。
+     * 删除 = 放弃离线重装能力 —— 文案在 Compose 层明示。
+     */
+    private fun refreshCache() {
+        _state.update { it.copy(cacheLoading = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val archives = systemImages.listCachedArchives()
+                _state.update {
+                    it.copy(
+                        cacheArchives = archives.map { a ->
+                            CacheRowUi(
+                                imageId = a.imageId,
+                                footprintLabel = formatBytes(a.diskBytes),
+                                apparentLabel = formatBytes(a.sizeBytes),
+                            )
+                        },
+                        cacheTotalDiskBytes = archives.sumOf { a -> a.diskBytes },
+                        cacheLoading = false,
+                    )
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                Log.w(TAG, "listing image cache failed", t)
+                _state.update { it.copy(cacheLoading = false) }
+            }
+        }
+    }
+
+    fun promptCacheDelete(id: String) = _state.update { it.copy(cacheDeletePromptId = id) }
+
+    fun cancelCacheDelete() = _state.update { it.copy(cacheDeletePromptId = null) }
+
+    fun promptCacheDeleteAll() = _state.update { it.copy(cacheDeleteAllPrompt = true) }
+
+    fun cancelCacheDeleteAll() = _state.update { it.copy(cacheDeleteAllPrompt = false) }
+
+    /** 单项清理（§6.4）：在传下载不打断（`.part` 本就不在列举内，这里再兜一层竞态）。 */
+    fun confirmCacheDelete() {
+        val id = _state.value.cacheDeletePromptId ?: return
+        _state.update { it.copy(cacheDeletePromptId = null, deletingCacheIds = it.deletingCacheIds + id) }
+        viewModelScope.launch {
+            try {
+                val removed = withContext(Dispatchers.IO) {
+                    if (downloadJobs[id]?.isActive == true) false
+                    else systemImages.deleteCachedArchive(id)
+                }
+                refreshCache()
+                _state.update {
+                    it.copy(
+                        deletingCacheIds = it.deletingCacheIds - id,
+                        message = if (removed) {
+                            context.getString(R.string.images_cache_removed, id)
+                        } else {
+                            context.getString(R.string.images_cache_nothing)
+                        },
+                    )
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                _state.update { it.copy(deletingCacheIds = it.deletingCacheIds - id, message = imageErrorMessage(context, t)) }
+            }
+        }
+    }
+
+    /** 全部清理（§6.4：放弃全部离线重装能力）。 */
+    fun confirmCacheDeleteAll() {
+        _state.update { it.copy(cacheDeleteAllPrompt = false) }
+        val active = downloadJobs.filterValues { it.isActive }.keys
+        _state.update { it.copy(deletingCacheIds = it.deletingCacheIds + active) }
+        viewModelScope.launch {
+            try {
+                val removed = withContext(Dispatchers.IO) {
+                    systemImages.listCachedArchives().count { a ->
+                        a.imageId !in active && systemImages.deleteCachedArchive(a.imageId)
+                    }
+                }
+                refreshCache()
+                _state.update {
+                    it.copy(
+                        deletingCacheIds = it.deletingCacheIds - active,
+                        message = context.getString(
+                            if (removed > 0) R.string.images_cache_removed_all else R.string.images_cache_nothing,
+                        ),
+                    )
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                _state.update { it.copy(deletingCacheIds = it.deletingCacheIds - active, message = imageErrorMessage(context, t)) }
+            }
         }
     }
 
@@ -182,9 +313,15 @@ class ImagesViewModel @Inject constructor(
         CatalogException.Reason.SIGNATURE_MISSING,
         CatalogException.Reason.SIGNATURE_INVALID,
         -> context.getString(R.string.images_catalog_sig_invalid) // §6.1：不降级加载
-        CatalogException.Reason.MALFORMED,
-        CatalogException.Reason.BAD_ENTRY,
-        -> context.getString(R.string.images_catalog_malformed)
+        CatalogException.Reason.MALFORMED -> when {
+            // schema 版本判别走 CatalogException.schema（原始 schema 值），不解析 message：
+            // <2 = 旧目录（目录需更新）、>2 = 目录比应用新（应用需更新），DESIGN §9/§7.2
+            e.schema != null && e.schema < 2L -> context.getString(R.string.images_catalog_schema_old)
+            e.schema != null && e.schema > 2L -> context.getString(R.string.images_catalog_schema_new)
+            else -> context.getString(R.string.images_catalog_malformed)
+        }
+        CatalogException.Reason.BAD_ENTRY ->
+            context.getString(R.string.images_catalog_malformed)
         CatalogException.Reason.NETWORK ->
             context.getString(R.string.images_catalog_error, e.message ?: "network")
     }

@@ -287,11 +287,28 @@ class VmdroidService : Service() {
                 is VmState.Starting, is VmState.Running -> seenActive = true
                 is VmState.Idle -> {
                     if (!seenActive) return@collect
+                    markBootedOnce()
                     teardown()
                 }
-                is VmState.Stopped, is VmState.Error -> teardown()
+                is VmState.Stopped, is VmState.Error -> {
+                    // §5.4 状态机：一次真实启动（Starting 之后）结束时刷 dirty 基线 +
+                    // 记 image.log `boot_done`。崩溃路径由 image.log/boots meta 双证据
+                    // 归因兜底（SystemImageStore 归因规则），此处只需覆盖正常停机。
+                    if (seenActive) markBootedOnce()
+                    teardown()
+                }
             }
         }
+    }
+
+    /**
+     * §5.4 状态机收尾：一次真实启动结束时，刷新镜像 dirty 基线 + 记 `image.log boot_done`
+     * （VmdroidService 只做触发；归因与落盘全在 SystemImageStore.markBooted）。
+     * 失败不阻断停机/teardown 流程 —— 崩溃窗口由 image.log/boots meta 双证据归因兜底。
+     */
+    private fun markBootedOnce() {
+        runCatching { systemImageRepository.markBooted() }
+            .onFailure { Log.w(TAG, "markBooted failed (ignored)", it) }
     }
 
     /** Release the WakeLock, drop the foreground notification, and stop. */

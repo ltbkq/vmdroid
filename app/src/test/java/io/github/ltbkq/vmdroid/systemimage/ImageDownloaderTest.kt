@@ -17,17 +17,28 @@ import java.nio.file.Files
  * §6.2 断点续传下载器单测 —— 用 JDK HttpServer 驱动真实 HTTP（Range/If-Range/416）。
  * 冻结测试镜像 = systemimage-selftest fixtures 的拷贝（id `debian-minimal-arm64`，
  * 1 MiB），随 test resources 入库，测试不依赖外部生成步骤。
+ * schema v2：下载目标 = `<id>.img.zst`（zstd -19 压缩的同一镜像），下载期只做
+ * zst sha256 + zstd frame magic 兜底；v1 裸 `.img` fixture 保留作 magic 兜底负例。
  */
 class ImageDownloaderTest {
 
     companion object {
         private val BODY: ByteArray by lazy {
+            checkNotNull(ImageDownloaderTest::class.java.getResourceAsStream("/fixtures/debian-minimal.img.zst")) {
+                "missing test fixture /fixtures/debian-minimal.img.zst"
+            }.use { it.readBytes() }
+        }
+
+        private val BODY_SHA: String by lazy { VmdImageCodec.sha256(BODY) }
+
+        /** v1 裸 `.img`（squashfs，非 zstd 容器）：magic 兜底负例与 image_sha256 交接用。 */
+        private val RAW_IMG: ByteArray by lazy {
             checkNotNull(ImageDownloaderTest::class.java.getResourceAsStream("/fixtures/debian-minimal.img")) {
                 "missing test fixture /fixtures/debian-minimal.img"
             }.use { it.readBytes() }
         }
 
-        private val BODY_SHA: String by lazy { VmdImageCodec.sha256(BODY) }
+        private val RAW_IMG_SHA: String by lazy { VmdImageCodec.sha256(RAW_IMG) }
     }
 
     private lateinit var imagesDir: File
@@ -61,9 +72,9 @@ class ImageDownloaderTest {
 
     private fun fields(name: String): Map<String, Any?> = events(name).last().second
 
-    private fun partFile() = File(imagesDir, "debian-minimal-arm64.img.part")
+    private fun partFile() = File(imagesDir, "debian-minimal-arm64.img.zst.part")
 
-    private fun infoFile() = File(imagesDir, "debian-minimal-arm64.img.part.info")
+    private fun infoFile() = File(imagesDir, "debian-minimal-arm64.img.zst.part.info")
 
     // ---------------------------------------------------------------- 基础
 
@@ -77,12 +88,12 @@ class ImageDownloaderTest {
             assertEquals("debian-minimal-arm64", out.imageId)
             assertEquals("debian-minimal-arm64", out.manifestId)
 
-            val file = File(imagesDir, "debian-minimal-arm64.img")
+            val file = File(imagesDir, "debian-minimal-arm64.img.zst")
             assertArrayEquals(BODY, file.readBytes())
             assertFalse(partFile().exists())
             assertFalse(infoFile().exists())
             // .meta.json 由上层 store.writeMeta 负责（职责切分）
-            assertFalse(File(imagesDir, "debian-minimal-arm64.img.meta.json").exists())
+            assertFalse(File(imagesDir, "debian-minimal-arm64.img.zst.meta.json").exists())
 
             // §16.5 生命周期：start（非续传）→ progress → done，无 fail
             val start = fields("download_start")
@@ -149,7 +160,7 @@ class ImageDownloaderTest {
             // ② 下次进入应用 → 自动续传
             val second = downloader().download(target(url = server.url), imagesDir)
             assertTrue("expected success, got $second", second is DownloadOutcome.Success)
-            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img").readBytes())
+            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img.zst").readBytes())
 
             // 服务器确实收到了 Range 续传请求
             assertTrue(server.seenRanges.any { it != null && it.startsWith("bytes=") })
@@ -186,7 +197,7 @@ class ImageDownloaderTest {
             val out = downloader().download(target(url = server.url), imagesDir)
             assertTrue("expected success, got $out", out is DownloadOutcome.Success)
             // 若错误地在旧前缀上追加，sha 必然对不上 —— 内容一致即证明从 0 重来
-            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img").readBytes())
+            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img.zst").readBytes())
             assertEquals("\"v1\"", server.seenIfRanges.last())
         } finally {
             server.stop()
@@ -207,7 +218,7 @@ class ImageDownloaderTest {
             server.always200 = true
             val out = downloader().download(target(url = server.url), imagesDir)
             assertTrue("expected success, got $out", out is DownloadOutcome.Success)
-            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img").readBytes())
+            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img.zst").readBytes())
         } finally {
             server.stop()
         }
@@ -235,7 +246,7 @@ class ImageDownloaderTest {
 
             val out = downloader().download(target(url = server.url), imagesDir)
             assertTrue("expected success, got $out", out is DownloadOutcome.Success)
-            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img").readBytes())
+            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img.zst").readBytes())
             assertEquals(1, server.seenRanges.size)
             assertEquals("bytes=${BODY.size}-", server.seenRanges[0])
             assertEquals(true, fields("download_start")["resume"])
@@ -256,7 +267,7 @@ class ImageDownloaderTest {
                 MiniJson.write(
                     mapOf(
                         "image_id" to "debian-minimal-arm64",
-                        "url" to "http://127.0.0.1:1/other.img",
+                        "url" to "http://127.0.0.1:1/other.img.zst",
                         "size" to BODY.size.toLong(),
                         "sha256" to BODY_SHA,
                     ),
@@ -266,7 +277,7 @@ class ImageDownloaderTest {
             assertTrue("expected success, got $out", out is DownloadOutcome.Success)
             // 首个请求不带 Range（从 0 重来）
             assertNull(server.seenRanges.first())
-            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img").readBytes())
+            assertArrayEquals(BODY, File(imagesDir, "debian-minimal-arm64.img.zst").readBytes())
         } finally {
             server.stop()
         }
@@ -319,7 +330,7 @@ class ImageDownloaderTest {
             assertFalse(f.resumable)
             assertFalse(partFile().exists())
             assertFalse(infoFile().exists())
-            assertFalse(File(imagesDir, "debian-minimal-arm64.img").exists())
+            assertFalse(File(imagesDir, "debian-minimal-arm64.img.zst").exists())
             assertEquals("sha256", fields("verify_fail")["fail"])
             assertTrue(events("download_fail").isNotEmpty())
         } finally {
@@ -338,7 +349,7 @@ class ImageDownloaderTest {
             assertTrue(f.resumable)
             assertTrue(partFile().isFile)
             assertTrue(infoFile().isFile)
-            assertFalse(File(imagesDir, "debian-minimal-arm64.img").exists())
+            assertFalse(File(imagesDir, "debian-minimal-arm64.img.zst").exists())
         } finally {
             server.stop()
         }
@@ -361,17 +372,74 @@ class ImageDownloaderTest {
     }
 
     @Test
-    fun manifestIdMismatch_rejectsAndDiscards() {
-        val server = FakeImageServer(BODY)
+    fun nonZstdContainer_rejectsAsImageInvalidAndDiscards() {
+        // sha 与 catalog 一致、但内容不是 zstd frame（v1 裸 .img 直链）→ magic 兜底拒
+        val server = FakeImageServer(RAW_IMG)
         try {
-            // catalog 声明 other-id，manifest 里是 debian-minimal-arm64（B-R2-5 防串条目）
-            val out = downloader().download(target(id = "other-id", url = server.url), imagesDir)
+            val out = downloader().download(
+                target(url = server.url, size = RAW_IMG.size.toLong(), sha = RAW_IMG_SHA),
+                imagesDir,
+            )
             val f = (out as DownloadOutcome.Failure).failure
             assertEquals(DownloadErrors.IMAGE_INVALID, f.err)
             assertFalse(f.resumable)
-            assertFalse(File(imagesDir, "other-id.img").exists())
-            assertFalse(File(imagesDir, "other-id.img.part").exists())
-            assertEquals("image_id", fields("verify_fail")["fail"])
+            assertFalse(partFile().exists())
+            assertFalse(infoFile().exists())
+            assertFalse(File(imagesDir, "debian-minimal-arm64.img.zst").exists())
+            assertEquals("container", fields("verify_fail")["fail"])
+            assertEquals(DownloadErrors.IMAGE_INVALID, fields("download_fail")["err"])
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun installHandoff_carriesCatalogFields() {
+        // v2：下载期不解包（旧「manifest image_id 绑定检查」移到 install 期）——
+        // 等价断言 = 产物命名 + InstallHandoff 显式交接字段正确（DESIGN-disk-image-v2 §6.1）
+        val server = FakeImageServer(BODY)
+        try {
+            val target = DownloadTarget.from(
+                CatalogEntry(
+                    imageId = "debian-minimal-arm64",
+                    displayName = "Debian 13 (trixie) · 最小化",
+                    identity = "debian:trixie",
+                    variant = "minimal",
+                    version = "2026.10.0-r1",
+                    systemVersion = 34L,
+                    arch = "arm64",
+                    channel = "stable",
+                    url = server.url,
+                    size = BODY.size.toLong(),
+                    sha256 = BODY_SHA,
+                    imageSize = RAW_IMG.size.toLong(),
+                    imageSha256 = RAW_IMG_SHA,
+                    appMinVersionCode = 3L,
+                    notes = "最小化：systemd + dropbear",
+                ),
+            )
+            val out = downloader().download(target, imagesDir)
+            assertTrue("expected success, got $out", out is DownloadOutcome.Success)
+            out as DownloadOutcome.Success
+            assertEquals("debian-minimal-arm64", out.imageId)
+            assertEquals("debian-minimal-arm64", out.manifestId) // v2：下载期不解包，恒 = catalog imageId
+            val file = File(imagesDir, "debian-minimal-arm64.img.zst")
+            assertEquals(file, out.file)
+            assertArrayEquals(BODY, file.readBytes())
+
+            val h = out.install
+            assertEquals(file, h.source)
+            assertEquals("debian-minimal-arm64", h.imageId)
+            assertEquals(BODY_SHA, h.zstSha256)
+            assertEquals(BODY.size.toLong(), h.zstSize)
+            assertEquals(RAW_IMG_SHA, h.imageSha256)
+            assertEquals(RAW_IMG.size.toLong(), h.imageSize)
+            assertEquals("Debian 13 (trixie) · 最小化", h.display.displayName)
+            assertEquals("debian:trixie", h.display.identity)
+            assertEquals("minimal", h.display.variant)
+            assertEquals("2026.10.0-r1", h.display.version)
+            assertEquals("stable", h.display.channel)
+            assertEquals("最小化：systemd + dropbear", h.display.notes)
         } finally {
             server.stop()
         }
@@ -417,10 +485,10 @@ class ImageDownloaderTest {
 
         private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
 
-        val url: String get() = "http://127.0.0.1:${server.address.port}/image.img"
+        val url: String get() = "http://127.0.0.1:${server.address.port}/image.img.zst"
 
         init {
-            server.createContext("/image.img") { ex ->
+            server.createContext("/image.img.zst") { ex ->
                 try {
                     handle(ex)
                 } catch (_: Exception) {

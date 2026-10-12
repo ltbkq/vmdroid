@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts.RequestPermissi
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -123,6 +125,7 @@ fun SettingsScreen(
     val portForwardPartialWarning by viewModel.portForwardPartialWarning.collectAsStateWithLifecycle()
     val usbPassthrough by viewModel.usbPassthroughEnabled.collectAsStateWithLifecycle()
     val autostartOnBoot by viewModel.autostartOnBoot.collectAsStateWithLifecycle()
+    val systemDisk by viewModel.systemDisk.collectAsStateWithLifecycle()
 
     // rememberSaveable: changing the language calls activity.recreate(), which
     // would otherwise silently close any open dialog and collapse Advanced.
@@ -172,11 +175,14 @@ fun SettingsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME &&
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                !Environment.isExternalStorageManager()
-            ) {
-                viewModel.setStorageAccessEnabled(false)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                // §6.5 回前台重扫系统盘容量（VM 可能在别处启动/扩容过）
+                viewModel.refreshSystemDisk()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                    !Environment.isExternalStorageManager()
+                ) {
+                    viewModel.setStorageAccessEnabled(false)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -193,6 +199,11 @@ fun SettingsScreen(
         val msg = portForwardPartialWarning ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(msg)
         viewModel.clearPortForwardPartialWarning()
+    }
+    LaunchedEffect(systemDisk.message) {
+        val msg = systemDisk.message ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(msg)
+        viewModel.clearSystemDiskMessage()
     }
 
     Scaffold(
@@ -283,6 +294,12 @@ fun SettingsScreen(
 
                 // ── STORAGE / SHARING ─────────────────────────────────
                 VmdroidSectionLabel(stringResource(R.string.storage))
+                // §6.5 系统盘容量（停机稀疏扩容 → guest 下次开机自扩容；数据盘见上方「存储」）
+                SystemDiskSection(
+                    state = systemDisk,
+                    vmNotRunning = vmNotRunning,
+                    onGrow = viewModel::growSystemDisk,
+                )
                 DownloadsSharingRow(
                     enabled = ui.storageAccessEnabled,
                     vmNotRunning = vmNotRunning,
@@ -562,6 +579,72 @@ private fun VmResourcesSection(
         modifier = Modifier.padding(
             start = VmdroidTokens.Spacing.MD,
             end = VmdroidTokens.Spacing.MD,
+            bottom = VmdroidTokens.Spacing.SM,
+        ),
+    )
+}
+
+/**
+ * §6.5「系统盘容量」：激活镜像 `.img` 的表观容量档位（**只增不减**，缩容不支持）。
+ * 仅 VM 停机（[vmNotRunning]）且激活镜像为 v2（[SystemDiskUiState.growable]）时可点；
+ * 否则按禁用原因给对应文案（运行中 / 无镜像 / 旧格式 / 已扩容待生效 / 已到最大档）。
+ * 成功选档后的提示（snackbar）：「下次启动自动扩容（guest 完成分区与文件系统扩展）」。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SystemDiskSection(
+    state: SystemDiskUiState,
+    vmNotRunning: Boolean,
+    onGrow: (Int) -> Unit,
+) {
+    val enabled = vmNotRunning && state.growable && !state.busy
+    Text(
+        // 无激活镜像时容量无意义 → 只显示标签 + "—"
+        "${stringResource(R.string.system_disk_label)}  ·  " +
+            (if (state.activeId == null) "—" else "${state.sizeGiB} GB"),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(
+            top = VmdroidTokens.Spacing.MD,
+            bottom = VmdroidTokens.Spacing.SM,
+        ),
+    )
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
+        verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
+    ) {
+        SYSTEM_DISK_OPTIONS_GB.forEach { gb ->
+            FilterChip(
+                selected = gb == state.currentGiB,
+                // 只增不减（§6.5）：≤ 当前容量的档位恒禁用
+                enabled = enabled && gb > state.sizeGiB,
+                onClick = { onGrow(gb) },
+                label = { Text("$gb GB") },
+                shape = RoundedCornerShape(VmdroidTokens.Radius.Chip),
+                colors = VmdroidChipColors(),
+            )
+        }
+    }
+    Text(
+        text = when {
+            state.busy -> stringResource(R.string.system_disk_growing)
+            !vmNotRunning -> stringResource(R.string.stop_vm_to_change)
+            state.activeId == null -> stringResource(R.string.system_disk_no_image_hint)
+            state.legacy -> stringResource(R.string.system_disk_legacy_hint)
+            !state.growable -> stringResource(R.string.system_disk_no_image_hint)
+            state.pendingGrow -> stringResource(R.string.system_disk_pending_grow_hint)
+            state.sizeGiB >= SYSTEM_DISK_OPTIONS_GB.last() -> stringResource(R.string.system_disk_max_hint)
+            else -> stringResource(R.string.system_disk_grow_hint)
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = if (state.legacy && vmNotRunning) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        modifier = Modifier.padding(
+            top = VmdroidTokens.Spacing.XS,
             bottom = VmdroidTokens.Spacing.SM,
         ),
     )

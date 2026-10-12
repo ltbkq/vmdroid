@@ -16,6 +16,11 @@
     <string name="stopping_vm">正在停止虚拟机…</string>
     <string name="stopping_action">正在停止…</string>
 
+    <!-- §7.1 启动过程可视化：启动状态区的日志尾巴（阶段标签之外的「明细」语义） -->
+    <string name="boot_log_live">启动日志 · 实时</string>
+    <string name="boot_log_summary_ok">启动完成 · %1$d 行日志</string>
+    <string name="boot_log_summary_last">上次启动 · %1$d 行日志</string>
+
     <!-- Network -->
     <string name="network">网络</string>
     <string name="phone_ip">手机 IP</string>
@@ -410,6 +415,9 @@
     <string name="images_catalog_error">获取镜像目录失败：%1$s</string>
     <string name="images_catalog_malformed">镜像目录格式错误</string>
     <string name="images_catalog_sig_invalid">镜像目录签名无效</string>
+    <string name="images_catalog_schema_old">镜像目录已过时 —— 该目录需要更新以适配当前应用版本</string>
+    <string name="images_catalog_schema_new">镜像目录比当前应用更新 —— 请更新应用</string>
+    <string name="images_download_install_space">存储空间不足，无法下载并安装</string>
     <string name="images_eta">剩 %1$s</string>
     <string name="images_remove_confirm_title">移除镜像？</string>
     <string name="images_remove_confirm_body">将删除 %1$s 及其校验记录。</string>
@@ -420,5 +428,36 @@
     <string name="images_factory_done">数据盘已清零，下次启动生效</string>
     <string name="images_err_storage_full">存储空间不足，无法下载</string>
     <string name="images_stop_vm_first">请先停止虚拟机</string>
+    <!-- M3 收尾（DESIGN-disk-image-v2）：v1 旧格式镜像提示（§10） -->
+    <string name="images_legacy_badge">旧格式</string>
+    <string name="images_legacy_hint">这是 v1 旧格式镜像，已无法启动。请删除后重新下载 v2 镜像。</string>
+    <string name="images_legacy_remove">清理旧镜像</string>
+    <!-- M3 收尾：dirty 徽标（§5.4 —— guest 已写入系统盘，内容无法校验） -->
+    <string name="images_dirty_badge">已修改</string>
+    <string name="images_dirty_hint">系统盘已被虚拟机内修改，无法校验内容。如需回到原厂状态，请重装系统。</string>
+    <!-- M3 收尾：安装包缓存管理（§6.4 —— 清理 = 放弃离线重装能力） -->
+    <string name="images_cache_section">安装包缓存</string>
+    <string name="images_cache_hint">保留已下载的 .img.zst，用于离线重装系统（恢复出厂 → 重装系统）；删除后重装需要重新下载。</string>
+    <string name="images_cache_empty">暂无缓存安装包</string>
+    <string name="images_cache_scanning">正在扫描缓存…</string>
+    <string name="images_cache_total">总占用 %1$s</string>
+    <string name="images_cache_footprint">占用 %1$s</string>
+    <string name="images_cache_delete">删除</string>
+    <string name="images_cache_delete_all">全部删除</string>
+    <string name="images_cache_delete_confirm_title">删除缓存安装包？</string>
+    <string name="images_cache_delete_confirm_body">删除 %1$s 后将无法离线重装该系统，需要时请重新下载。</string>
+    <string name="images_cache_delete_all_confirm_body">删除全部缓存后将无法离线重装任何系统，需要时请重新下载。</string>
+    <string name="images_cache_removed">已删除 %1$s</string>
+    <string name="images_cache_removed_all">已删除全部缓存安装包</string>
+    <string name="images_cache_nothing">没有可删除的缓存</string>
+    <!-- M3 收尾：系统盘容量档位（§6.5 —— 停机扩容，guest 下次开机自扩容） -->
+    <string name="system_disk_label">系统盘容量</string>
+    <string name="system_disk_grow_hint">更大的容量在下次启动时生效（虚拟机内自动完成分区与文件系统扩展）。容量只能增大，无法缩小。</string>
+    <string name="system_disk_grow_done">系统盘已设为 %1$s GB —— 下次启动自动扩容（虚拟机内完成分区与文件系统扩展）</string>
+    <string name="system_disk_no_image_hint">没有可扩容的系统镜像。</string>
+    <string name="system_disk_legacy_hint">当前激活镜像为 v1 旧格式 —— 请先到「系统镜像」页清理并安装 v2 镜像。</string>
+    <string name="system_disk_pending_grow_hint">已扩容 —— 虚拟机将在下次启动时自动扩展分区与文件系统。</string>
+    <string name="system_disk_max_hint">已到最大档位（32 GB）。</string>
+    <string name="system_disk_growing">扩容中…</string>
     <string name="settings_downloads_wifi_only">仅 Wi-Fi 下载</string>
 </resources>

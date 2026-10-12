@@ -1,0 +1,3 @@
+QEMU_EFI.fd — edk2 (TianoCore) aarch64 UEFI 固件，来自 Ubuntu qemu-efi-aarch64 包（/usr/share/qemu-efi-aarch64/QEMU_EFI.fd）。
+许可证：BSD-2-Clause (TianoCore EDK2)。用途：QEMU 后端 v2 磁盘镜像的 -bios 单文件固件（DESIGN-disk-image-v2 §3.1 / P0-5 定案，2MB）。
+VARS 不需要：GRUB timeout=0 不写 UEFI 变量；如未来需要可写变量，改用 AAVMF 双 pflash（备选，见设计 §3.1）。

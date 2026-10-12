@@ -85,3 +85,8 @@ app/src/main/jniLibs/
 #   out/:     kotlinc jar + classes (~88 MB, -include-runtime bundles a JRE)
 /systemimage-selftest/fixtures/
 /systemimage-selftest/out/
+
+# M0 spike runtime (tools/m0): extracted GRUB platform + run outputs (可重建/易变)
+#   GRUB 平台: dpkg-deb 解包 grub-efi-arm64-bin；outputs: 探测与计时日志
+/tools/m0/cache/
+/tools/m0/out/

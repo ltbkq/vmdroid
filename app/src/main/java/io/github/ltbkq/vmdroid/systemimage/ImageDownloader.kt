@@ -1,11 +1,17 @@
 /*
- * VMDroid - image downloader with HTTP range resume (DESIGN §6.2).
+ * VMDroid - image downloader with HTTP range resume (DESIGN §6.2 / disk-image-v2 §6.1).
  * Copyright (C) 2024-2026 Podroid contributors
  *
  * 实现依据（冻结规格）：
- *   - docs/DESIGN.md §6.2（预检 size+余量 → Range 续传/416/validators 变化重来 →
- *     每块同时喂 sha256 → 完成后 sha256 == catalog.sha256 且 footer/manifest 通过
- *     （N4：footer 必需，缺失即拒）→ fsync + rename → 上层补写 .meta.json）
+ *   - docs/DESIGN-disk-image-v2.md §6.1（下载 `.img.zst`：预检 margin = zst `size` + 32 MiB，
+ *     另按 `image_size` 做落盘余量预检；完成后 sha256 == catalog.sha256（= zst 摘要）
+ *     → fsync + rename → **显式参数交接 Store.install**（imageId + zst 双摘要/尺寸 + 展示字段），
+ *     解压/`image_sha256` 全量校验/结构校验移到 install 期）
+ *   - docs/DESIGN-disk-image-v2.md §9（落盘预检用 st_blocks 语义估算，不能拿 apparent
+ *     size 直接判空间不足 —— 见 [ImageDownloader.landingEstimate] 的取舍注释）
+ *   - docs/IMAGE-FORMAT-v2.md §7.1（容器 = 标准 zstd frame；下载只做 sha256 + 廉价
+ *     magic 兜底，结构校验由 Store 在解压后做）
+ *   - docs/DESIGN.md §6.2（Range 续传/416/validators 变化重来；.part.info 续传依据）
  *   - docs/DESIGN.md §16.5（download_start/download_progress/download_done/
  *     download_fail；progress 每 5% 或 4MB 节流；每条含 dur_ms，ts 由 ImageLog 加）
  *   - docs/DESIGN.md §16.9（.part 永不冒充成品：进程被杀后 .part + .part.info
@@ -22,12 +28,67 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/** §6.2 下载目标：catalog 条目的下载期快照（`.part.info` 的续传依据）。 */
+/**
+ * §6.2 下载目标：catalog 条目的下载期快照（`.part.info` 的续传依据）。
+ *
+ * schema v2（IMAGE-FORMAT-v2 §7.2）：
+ *  - [size] / [sha256] —— `.img.zst` 容器字节数与摘要（下载预检/续传/完成校验）；
+ *  - [imageSize] / [imageSha256] —— 解压后 `.img` 的表观字节数与摘要（落盘预检 +
+ *    install 期全量校验）。旧 4 参调用点（未升级前）给 0/""，此时落盘预检自动降级为
+ *    仅 zst+margin（见 [ImageDownloader.landingEstimate]）。
+ *  - [display] —— 展示字段（install 交接的 display 部分；null 时以 imageId 兜底）。
+ */
 data class DownloadTarget(
     val imageId: String,
     val url: String,
     val size: Long,
     val sha256: String,
+    val imageSize: Long = 0L,
+    val imageSha256: String = "",
+    val display: CatalogDisplay? = null,
+) {
+    companion object {
+        /** 从 schema2 目录条目构造完整下载目标（调用方从 4 参升级到本工厂即可启用双摘要交接）。 */
+        fun from(entry: CatalogEntry): DownloadTarget = DownloadTarget(
+            imageId = entry.imageId,
+            url = entry.url,
+            size = entry.size,
+            sha256 = entry.sha256,
+            imageSize = entry.imageSize,
+            imageSha256 = entry.imageSha256,
+            display = entry.display(),
+        )
+    }
+}
+
+/**
+ * 下载完成 → `SystemImageStore.install(...)` 的**显式交接**（DESIGN-disk-image-v2 §6.1）。
+ *
+ * 集成契约（Store 侧签名以此为准，集成时统一）：
+ * ```
+ * fun install(
+ *     source: File,          // 下载产物 <imageId>.img.zst（已过 zst sha256 校验）
+ *     imageId: String,       // catalog image_id（bind 用）
+ *     zstSha256: String,     // = catalog.sha256（下载期已校验，避免 Store 重读整包）
+ *     zstSize: Long,         // = catalog.size
+ *     imageSha256: String,   // = catalog.image_sha256（解压后全量校验锚点；"" = 未知，Store 自算）
+ *     imageSize: Long,       // = catalog.image_size（apparent；0 = 未知）
+ *     display: CatalogDisplay, // 展示字段
+ *     src: String = "download",
+ *     onProgress: ((Long) -> Unit)? = null,
+ * ): InstalledImage
+ * ```
+ * 旧调用方（SystemImageRepository 尚未升级时）经 4 参 [DownloadTarget] 进来的目标
+ * [imageSha256]/[imageSize] 为 ""/0 —— install 侧须按「未知」处理（自算摘要），不要拿 0 当校验值。
+ */
+data class InstallHandoff(
+    val source: File,
+    val imageId: String,
+    val zstSha256: String,
+    val zstSize: Long,
+    val imageSha256: String,
+    val imageSize: Long,
+    val display: CatalogDisplay,
 )
 
 /** 进度快照（UI 行内进度 / 通知栏共用）。 */
@@ -52,7 +113,22 @@ data class DownloadFailure(
 )
 
 sealed class DownloadOutcome {
-    data class Success(val imageId: String, val file: File, val manifestId: String) : DownloadOutcome()
+    /**
+     * 下载成功（`.img.zst` 已 fsync + rename + sha256 校验通过）。
+     *
+     * [file] = 下载产物 `<imageId>.img.zst`；[install] = 向 Store 交接的显式参数。
+     * [manifestId]：v1 时是「解析 footer 后与 catalog 比对过的 manifest.image.id」；
+     * v2 下载期不解包（`.img.zst` 未解压，结构/`image_sha256` 校验移到 install 期，
+     * DESIGN §6.1），故恒 = catalog [imageId]，image_id ↔ manifest 绑定由 Store 在
+     * install 期完成 —— 字段保留仅为兼容既有调用方（读方只把它当 imageId 用）。
+     */
+    data class Success(
+        val imageId: String,
+        val file: File,
+        val manifestId: String,
+        val install: InstallHandoff,
+    ) : DownloadOutcome()
+
     data class Failure(val failure: DownloadFailure) : DownloadOutcome()
 }
 
@@ -73,18 +149,31 @@ object DownloadErrors {
  * §6.2 断点续传下载器（阻塞式；调用方放 `Dispatchers.IO`，以 [shouldContinue]
  * 做协作取消）。单任务串行由上层保证。**永不抛网络/IO 异常**（一律折成
  * [DownloadFailure]）；仅 sink/取消源自身抛出时传播。
+ *
+ * schema v2：下载目标 = `.img.zst`（[ImageCatalog.IMG_ZST_SUFFIX]）；下载期只做
+ * sha256 + zstd magic 兜底，镜像结构校验与 `image_sha256` 全量校验在 install 期做。
  */
 class ImageDownloader(
-    private val versionCode: () -> Long?,
+    // v2 起下载期不再调 VmdImageCodec（结构校验移到 install 期）；参数保留以兼容
+    // 既有构造点（SystemImageRepository 传入），后续若做 app_min_version_code 下载
+    // 期门闩可直接复用。
+    @Suppress("UNUSED") private val versionCode: () -> Long?,
     private val availableBytes: () -> Long,
     private val events: (event: String, fields: Map<String, Any?>) -> Unit,
 ) {
     companion object {
-        /** §6.2 预检余量：`size + 32 MiB`（"size + 余量"的落值）。 */
+        /**
+         * §6.2 预检余量：`size + 32 MiB`（"size + 余量"的落值）。
+         * schema v2：[DownloadTarget.size] = `.img.zst` 字节数（DESIGN-disk-image-v2 §6.1
+         * 「预检 margin = size + 32 MiB」）；落盘余量另检，见 [ImageDownloader.landingEstimate]。
+         */
         const val STORAGE_MARGIN = 32L * 1024 * 1024
 
-        /** `<image_id>.img.part.info` —— 续传元数据（url/size/sha + validators）。 */
+        /** `<image_id>.img.zst.part.info` —— 续传元数据（url/size/sha + 双摘要/展示 + validators）。 */
         const val INFO_SUFFIX = ".part.info"
+
+        /** zstd frame magic（little-endian 0xFD2FB528，ISO 18838）—— 廉价容器形态兜底。 */
+        private val ZSTD_MAGIC = byteArrayOf(0x28.toByte(), 0xB5.toByte(), 0x2F.toByte(), 0xFD.toByte())
 
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000
@@ -95,23 +184,44 @@ class ImageDownloader(
 
         /** Range/validators 状态机允许的最大重连次数（防御病态服务端）。 */
         private const val MAX_REOPEN = 2
+
+        /** 饱和加法（空间预检：size+margin+估算不允许溢出成负数）。 */
+        private fun saturatingAdd(a: Long, b: Long): Long =
+            if (a > Long.MAX_VALUE - b) Long.MAX_VALUE else a + b
     }
 
     private val throttle = ProgressThrottle() // §16.9：每 5% 或 4MB 记一行
 
+    /** 下载目标文件：`<image_id>.img.zst.part`（v1 是 `<id>.img.part`，格式硬切换后改名）。 */
     fun partFile(imagesDir: File, imageId: String): File =
-        File(imagesDir, "$imageId${SystemImageStore.IMG_SUFFIX}${SystemImageStore.PART_SUFFIX}")
+        File(imagesDir, "$imageId${ImageCatalog.IMG_ZST_SUFFIX}${SystemImageStore.PART_SUFFIX}")
 
     fun infoFile(imagesDir: File, imageId: String): File =
-        File(imagesDir, "$imageId${SystemImageStore.IMG_SUFFIX}$INFO_SUFFIX")
+        File(imagesDir, "$imageId${ImageCatalog.IMG_ZST_SUFFIX}$INFO_SUFFIX")
 
-    /** 扫描 images/ 下全部未完成下载（进程被杀 → 下次进入应用自动续传的输入）。 */
+    /**
+     * 扫描 images/ 下全部未完成下载（进程被杀 → 下次进入应用自动续传的输入）。
+     *
+     * 只认 `.img.zst.part.info`（v2 命名）—— v1 遗留的 `<id>.img.part.info`（.img 直链
+     * 半成品，DESIGN-disk-image-v2 §10.5 旧资产已下架）不再续传：它们会按 v1 sha 白下
+     * 一整包然后在容器校验处被拒。遗留文件不主动删除（清理交给 store.delete / 手工）。
+     */
     fun pendingTargets(imagesDir: File): List<DownloadTarget> {
         val files = imagesDir.listFiles() ?: return emptyList()
         return files
-            .filter { it.isFile && it.name.endsWith(INFO_SUFFIX) }
+            .filter { it.isFile && it.name.endsWith(ImageCatalog.IMG_ZST_SUFFIX + INFO_SUFFIX) }
             .mapNotNull { readInfo(it) }
-            .map { DownloadTarget(it.imageId, it.url, it.size, it.sha256) }
+            .map {
+                DownloadTarget(
+                    imageId = it.imageId,
+                    url = it.url,
+                    size = it.size,
+                    sha256 = it.sha256,
+                    imageSize = it.imageSize,
+                    imageSha256 = it.imageSha256,
+                    display = it.display,
+                )
+            }
             .distinctBy { it.imageId }
     }
 
@@ -128,11 +238,27 @@ class ImageDownloader(
         val info = infoFile(imagesDir, target.imageId)
 
         // ① 空间预检（§6.2-1 / §13.2 STORAGE_FULL 用例：写盘前拦截，本次不创建 .part）
+        // ①a 下载体积：margin 按 zst `size`（DESIGN-disk-image-v2 §6.1：预检 = size + 32 MiB）
         val available = runCatching { availableBytes() }.getOrDefault(Long.MAX_VALUE)
-        if (available < target.size + STORAGE_MARGIN) {
+        val downloadNeed = saturatingAdd(target.size, STORAGE_MARGIN)
+        if (available < downloadNeed) {
             return fail(
                 target, startedAt, DownloadErrors.STORAGE_FULL,
-                "need ${target.size + STORAGE_MARGIN} bytes, have $available",
+                "need $downloadNeed bytes (.img.zst ${target.size} + margin $STORAGE_MARGIN), have $available",
+                bytes = if (part.isFile) part.length().coerceAtMost(target.size) else 0L,
+                resumable = part.isFile,
+            )
+        }
+        // ①b 落盘余量：安装时 zst 与解压后的 .img 并存（缓存默认保留 .img.zst，
+        //     DESIGN §6.1）→ 峰值 ≈ zst + .img 实际占用；估算口径见 landingEstimate。
+        //     image_size 未知（旧 4 参调用点，imageSize == 0）→ 跳过本检查，退回 v1 行为。
+        val landing = landingEstimate(target)
+        if (landing > 0L && available < saturatingAdd(downloadNeed, landing)) {
+            return fail(
+                target, startedAt, DownloadErrors.STORAGE_FULL,
+                "need ${saturatingAdd(downloadNeed, landing)} bytes " +
+                    "(download ${target.size} + margin $STORAGE_MARGIN + install estimate $landing " +
+                    "= min(image_size ${target.imageSize}, zst×3)), have $available",
                 bytes = if (part.isFile) part.length().coerceAtMost(target.size) else 0L,
                 resumable = part.isFile,
             )
@@ -302,36 +428,17 @@ class ImageDownloader(
             return DownloadOutcome.Failure(DownloadFailure(DownloadErrors.SHA_MISMATCH, detail, resumable = false))
         }
 
-        // ④′ footer/manifest 解析校验（§7.4 清单 3–9；N4 footer 必需，缺失即拒）
-        val read = try {
-            VmdImageCodec.read(part, runCatching { versionCode() }.getOrNull())
-        } catch (e: VmdImageException) {
+        // ④′ 容器形态兜底（IMAGE-FORMAT-v2 §7.1）：sha256 == catalog.sha256 已由签名目录
+        // 锚定内容；此处只做廉价 zstd frame magic 检查（公钥未内置阶段兜住伪装内容，
+        // 错误分类沿用 IMAGE_INVALID）。镜像结构校验与 image_sha256 全量校验**移到
+        // install 期**（Store 解压后做，DESIGN §6.1：.img.zst 未解压时读不出 footer/manifest）。
+        if (!hasZstdMagic(part)) {
             part.delete()
             info.delete()
+            val detail = "not a zstd frame (.img.zst expected): ${part.name}"
             emit(
                 "verify_fail",
-                linkedMapOf("image" to target.imageId, "fail" to e.reason.name, "err" to e.message),
-                startedAt,
-            )
-            emit(
-                "download_fail",
-                linkedMapOf("image" to target.imageId, "src" to target.url, "bytes" to target.size, "err" to DownloadErrors.IMAGE_INVALID),
-                startedAt,
-            )
-            return DownloadOutcome.Failure(
-                DownloadFailure(DownloadErrors.IMAGE_INVALID, e.message ?: e.reason.name, resumable = false),
-            )
-        }
-        // §6.1（R2: B-R2-5）：落盘名恒由校验后的 manifest.image.id 决定；与 catalog
-        // 声明不一致 = 目录被换过/串了条目，拒绝。
-        val manifestId = read.manifest.image.id
-        if (manifestId == null || manifestId != target.imageId) {
-            part.delete()
-            info.delete()
-            val detail = "manifest image.id '$manifestId' != catalog image_id '${target.imageId}'"
-            emit(
-                "verify_fail",
-                linkedMapOf("image" to target.imageId, "fail" to "image_id", "err" to detail),
+                linkedMapOf("image" to target.imageId, "fail" to "container", "err" to detail),
                 startedAt,
             )
             emit(
@@ -342,8 +449,8 @@ class ImageDownloader(
             return DownloadOutcome.Failure(DownloadFailure(DownloadErrors.IMAGE_INVALID, detail, resumable = false))
         }
 
-        // ⑤ rename(.part → .img)；.meta.json 由上层 store.writeMeta 补写
-        val finalFile = File(imagesDir, "$manifestId${SystemImageStore.IMG_SUFFIX}")
+        // ⑤ rename(.part → .img.zst)；解压安装与 .meta.json 由 Store.install 显式参数接手
+        val finalFile = File(imagesDir, "${target.imageId}${ImageCatalog.IMG_ZST_SUFFIX}")
         if (finalFile.exists() && !finalFile.delete()) {
             return fail(
                 target, startedAt, DownloadErrors.NETWORK,
@@ -355,7 +462,7 @@ class ImageDownloader(
         if (!part.renameTo(finalFile)) {
             return fail(
                 target, startedAt, DownloadErrors.NETWORK,
-                "rename .part -> .img failed",
+                "rename .part -> ${ImageCatalog.IMG_ZST_SUFFIX} failed",
                 bytes = target.size,
                 resumable = true,
             )
@@ -371,7 +478,24 @@ class ImageDownloader(
             ),
             startedAt,
         )
-        return DownloadOutcome.Success(target.imageId, finalFile, manifestId)
+        // ⑥ 显式交接（DESIGN-disk-image-v2 §6.1）：产物路径 + imageId + zst 双摘要/尺寸 +
+        //    展示字段，替代 v1 的「outcome.file + target.sha256 → store.writeMeta」隐式约定。
+        val handoff = InstallHandoff(
+            source = finalFile,
+            imageId = target.imageId,
+            zstSha256 = target.sha256,
+            zstSize = target.size,
+            imageSha256 = target.imageSha256,
+            imageSize = target.imageSize,
+            display = target.display ?: CatalogDisplay(displayName = target.imageId),
+        )
+        return DownloadOutcome.Success(
+            imageId = target.imageId,
+            file = finalFile,
+            // v2：下载期不解包 manifest，绑定检查在 install 期（见 Success 的 KDoc）
+            manifestId = target.imageId,
+            install = handoff,
+        )
     }
 
     // ---------------------------------------------------------------- 连接协商
@@ -554,6 +678,43 @@ class ImageDownloader(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    /** zstd frame magic（前 4 字节 = 0xFD2FB528 LE）；空文件/读失败 → false。 */
+    private fun hasZstdMagic(file: File): Boolean = try {
+        val head = ByteArray(ZSTD_MAGIC.size)
+        RandomAccessFile(file, "r").use { it.readFully(head) }
+        head.contentEquals(ZSTD_MAGIC)
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * 落盘余量估算（DESIGN-disk-image-v2 §6.1/§9：「`free ≥ image_size 的实际估算
+     * （≈ zst×3 或 rootfs 用量+余量），用 st_blocks 语义避免拿 apparent size 误判空间不足」）。
+     *
+     * 取舍（为什么不直接拿 image_size，也不假装能读 st_blocks）：
+     *  - `image_size` 是 **apparent** 字节（GiB 级，含全零稀疏区）；`st_blocks×512` 才是
+     *    真实占用，但 `.img` 此刻**还不存在**，无法 stat —— 下载预检拿 apparent 直接判
+     *    必然误杀（零区不落盘，设计 §7.1：稀疏跳写后占用 ≈ rootfs 用量）；
+     *  - 反向也不行：只按 zst+32MiB 放行会漏掉「下载得下、装不下」的组合；
+     *  - 折中 = 启发式 `min(image_size, zst × 3)`：zstd -19 对镜像里的零段压缩比极高，
+     *    实际占用（非零内容）≈ zst × 压缩比，取 ≥3 作为上界估计；`image_size` 本身是
+     *    任何情况都到不了的绝对上限，拿它封顶。比单纯 zst×3 更保守的场景（高压缩比
+     *    镜像）已被 min() 收敛到 apparent，不会要求一个装不下的空间。
+     *  - 未知（imageSize ≤ 0，旧 4 参调用点）→ 返回 0 = **跳过检查**（退回 v1 只按
+     *    zst+margin 的口径），不让「调用点尚未升级」变成误杀；升级到
+     *    [DownloadTarget.from] 后自动生效。真实 st_blocks 校验仍在 install 期由 Store
+     *    落 `.img.part` 时按实际写入失败即报（最终防线）。
+     *
+     * internal 供单测锁定口径。
+     */
+    internal fun landingEstimate(target: DownloadTarget): Long {
+        val apparent = target.imageSize
+        val zst = target.size
+        if (apparent <= 0L || zst <= 0L) return 0L
+        val byRatio = if (zst > Long.MAX_VALUE / 3) Long.MAX_VALUE else zst * 3
+        return minOf(apparent, byRatio)
+    }
+
     private fun fail(
         target: DownloadTarget,
         startedAt: Long,
@@ -600,11 +761,25 @@ class ImageDownloader(
         val url: String,
         val size: Long,
         val sha256: String,
+        val imageSize: Long,
+        val imageSha256: String,
+        val display: CatalogDisplay?,
         val etag: String?,
         val lastModified: String?,
     ) {
-        fun matches(t: DownloadTarget) =
-            imageId == t.imageId && url == t.url && size == t.size && sha256 == t.sha256
+        /**
+         * 续传判定：核心四元组（id/url/zst size/zst sha）必须完全一致；
+         * 双摘要字段**仅在两侧都已知且不同时**才判失配 —— 旧 .part.info（无 image 字段）
+         * 或调用点尚未升级（imageSize=0）时以本次 target 为准，不浪费已下的前缀。
+         */
+        fun matches(t: DownloadTarget): Boolean {
+            val imageMetaMatches =
+                (imageSize == 0L || t.imageSize == 0L || imageSize == t.imageSize) &&
+                    (imageSha256.isEmpty() || t.imageSha256.isEmpty() ||
+                        imageSha256.equals(t.imageSha256, ignoreCase = true))
+            return imageId == t.imageId && url == t.url && size == t.size &&
+                sha256 == t.sha256 && imageMetaMatches
+        }
     }
 
     private fun writeInfo(file: File, target: DownloadTarget, etag: String?, lastModified: String?) {
@@ -613,6 +788,17 @@ class ImageDownloader(
         map["url"] = target.url
         map["size"] = target.size
         map["sha256"] = target.sha256
+        // schema v2：双摘要 + 展示字段一并落盘，续传（pendingTargets → install 交接）才不丢
+        map["image_size"] = target.imageSize
+        map["image_sha256"] = target.imageSha256
+        target.display?.let { d ->
+            map["display_name"] = d.displayName
+            d.identity?.let { map["identity"] = it }
+            d.variant?.let { map["variant"] = it }
+            d.version?.let { map["version"] = it }
+            d.channel?.let { map["channel"] = it }
+            d.notes?.let { map["notes"] = it }
+        }
         if (etag != null) map["etag"] = etag
         if (lastModified != null) map["last_modified"] = lastModified
         runCatching { AtomicFiles.write(file, MiniJson.write(map)) }
@@ -631,11 +817,24 @@ class ImageDownloader(
         val url = MiniJson.str(m, "url") ?: return null
         val size = MiniJson.long(m, "size") ?: return null
         val sha256 = MiniJson.str(m, "sha256") ?: return null
+        val displayName = MiniJson.str(m, "display_name")
         return SavedInfo(
             imageId = imageId,
             url = url,
             size = size,
             sha256 = sha256,
+            imageSize = MiniJson.long(m, "image_size") ?: 0L,
+            imageSha256 = MiniJson.str(m, "image_sha256") ?: "",
+            display = displayName?.let {
+                CatalogDisplay(
+                    displayName = it,
+                    identity = MiniJson.str(m, "identity"),
+                    variant = MiniJson.str(m, "variant"),
+                    version = MiniJson.str(m, "version"),
+                    channel = MiniJson.str(m, "channel"),
+                    notes = MiniJson.str(m, "notes"),
+                )
+            },
             etag = MiniJson.str(m, "etag"),
             lastModified = MiniJson.str(m, "last_modified"),
         )

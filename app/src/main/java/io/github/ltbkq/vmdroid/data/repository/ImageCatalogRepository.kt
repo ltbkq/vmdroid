@@ -45,7 +45,7 @@ class ImageCatalogRepository @Inject constructor(
          * （生成与签名见 distro-build/mkcatalog.sh）。
          */
         const val DEFAULT_URL =
-            "https://github.com/ltbkq/vmdroid/releases/download/system-images-2026.10.08/catalog.json"
+            "https://github.com/ltbkq/vmdroid/releases/download/system-images-v2-2026.10.12/catalog.json"
 
         private const val TAG = "ImageCatalogRepo"
         private const val CONNECT_TIMEOUT_MS = 15_000

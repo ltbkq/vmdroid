@@ -5,7 +5,7 @@
 #   tools/pc-run.sh --dry-run debian.img            # 只打印完整 QEMU 命令行
 #   tools/pc-run.sh --smoke --timeout 90 debian.img # 启动 + 等 Ready! + SSH 探活 + 退出
 #
-# 共享实现：tools/lib/imgboot.sh（Podroid-Debian/tools/pc-boot-smoke.sh source 同一份，
+# 共享实现：tools/lib/imgboot.sh（与原 Podroid-Debian/tools/pc-boot-smoke.sh 同源实现；该仓库已废弃）
 # 提取与启动逻辑单一来源，不复制两份 —— DESIGN §11.2 归属）。
 # 依赖：qemu-system-aarch64(apt install qemu-system-arm) python3 e2fsprogs openssh-client
 set -eu

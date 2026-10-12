@@ -68,3 +68,104 @@ grep -rn "^import android" \
 `SystemImageRepository.kt` 是 **Android 薄壳**（Context / PackageManager / Hilt / logcat），
 不含业务逻辑：它只把 `filesDir`、`versionCode` 和 `imageLog` 注入 [SystemImageStore]。
 `VmdroidService.kt` 只加两处调用（BootGuard 主判定 + §16.2 轮转），见交付报告。
+
+## 4. v2 自测（SelfTestV2 —— VmdDiskCodec / EspFat32，IMAGE-FORMAT-v2）
+
+`SelfTestV2.kt` 与 `SelfTest.kt` 平行：纯 JVM、无 JUnit，被测依赖为
+`VmdDiskCodec.kt`（GPT/meta/manifest 读取算法，§5 权威时序）与 `EspFat32.kt`
+（ESP FAT32 只读解析，AVF 回退方案 B 用）。三段式：
+
+1. **合成负样本**：诊断阶梯（`NOT_AN_IMAGE`/`LEGACY_FORMAT`/`CORRUPT` 三分支）、
+   mixed-endian GUID 往返、FAT32 单元冒烟（现场 `mkfs.vfat`+`mcopy`，含 LFN/子目录）；
+2. **夹具对账**：消费 `codec-selftest/fixtures/v2/fixtures-v2.json`（25 条，oracle 实录），
+   `expect=ok` → 解析成功 + 字段可读 + `verifyFull`；`expect=reject` → 拒绝且 reason 映射一致。
+   清单缺失时打印 SKIP（并行施工兜底），**不失败**；
+3. **冒烟模式**：`java -jar selftest-v2.jar <manifest.json> <img>` 或 `VMD_SMOKE_IMAGE=<img>`
+   指定现场镜像跑全流程（read/verifyFull/FAT32 读 ESP 五项文件/partuuid 对账）。
+
+```sh
+cd <worktree根>
+K=/media/ltbkq/mydata/tools
+$K/kotlinc/bin/kotlinc \
+  app/src/main/java/io/github/ltbkq/vmdroid/systemimage/VmdDiskCodec.kt \
+  app/src/main/java/io/github/ltbkq/vmdroid/systemimage/EspFat32.kt \
+  app/src/main/java/io/github/ltbkq/vmdroid/systemimage/MiniJson.kt \
+  systemimage-selftest/SelfTestV2.kt \
+  -jvm-target 17 -include-runtime -d systemimage-selftest/out/selftest-v2.jar
+
+java -jar systemimage-selftest/out/selftest-v2.jar        # 夹具向上目录查找
+```
+
+本机实测（2026-10-12，四方集成对账）：**34 passed, 0 failed, 1 skipped**
+（夹具 25/25 与 oracle 期望一致：3 ok / 22 reject；REJECT-REASONS 分布
+CORRUPT=12、FORMAT_UNSUPPORTED=2、LEGACY_FORMAT=2、ARCH/SSH_CAP/SSH_PORT/IMAGE_ID/
+BOOT_MODE/CONTRACT 各 1（12+2+2+6=22 ✓；CORRUPT=12 含 `app.min_version_code` 缺失项，
+2026-10-12 reason 对齐后计数）。
+
+## 4. v2 自测（SelfTestV2，IMAGE-FORMAT-v2）
+
+`VmdDiskCodec.kt`（v2 磁盘镜像读取侧，§5 阶段 1–4）与 `EspFat32.kt`（ESP FAT32 最小只读
+解析器，AVF 回退方案 B / 诊断）同样是**纯 JVM Kotlin**（零 `android.*` import），用
+`SelfTestV2.kt`（无 JUnit 依赖）自测：
+
+| 段 | 内容 | 依赖 |
+|---|---|---|
+| 1 | 合成负样本：§5 诊断阶梯（NOT_AN_IMAGE / LEGACY_FORMAT / GPT 头缺失→CORRUPT）+ mixed-endian GUID 往返（§2.2，`uuid.UUID(bytes_le)` 语义） | 无 |
+| 2 | `EspFat32` 单元冒烟：`mkfs.vfat`+`mcopy` 现场造 FAT32（8.3 大小写不敏感 + LFN 长名 + 子目录 + 二进制） | 缺工具则 SKIP |
+| 3 | 夹具对账：消费 **`codec-selftest/fixtures/v2/fixtures-v2.json`**（工位 B 并行生成，本目录**只读**）：`expect=ok` → read + 字段可读 + verifyFull；`expect=reject` → read/verifyFull 拒绝且 reason 一致。**清单缺失时打 SKIP 不失败** | 清单稍后落盘时自动启用 |
+| 4 | 冒烟模式：对 `mkdisk.sh` 现场产物跑 read/verifyFull + FAT32 读 ESP 五项文件（`/vmlinuz`、`/initrd.img`、`/vmdroid/manifest.json`【LFN】、`/grub/grub.cfg`、`BOOTAA64.EFI`）+ FAT 卷 ID ↔ `disk.esp.fat_uuid` 对账 | 需指定镜像 |
+
+### 4.1 编译
+
+```sh
+cd <worktree根>            # 本例: /media/ltbkq/mydata/vmdroid-app
+K=/media/ltbkq/mydata/tools
+$K/kotlinc/bin/kotlinc \
+  app/src/main/java/io/github/ltbkq/vmdroid/systemimage/VmdDiskCodec.kt \
+  app/src/main/java/io/github/ltbkq/vmdroid/systemimage/EspFat32.kt \
+  app/src/main/java/io/github/ltbkq/vmdroid/systemimage/MiniJson.kt \
+  systemimage-selftest/SelfTestV2.kt \
+  -jvm-target 17 -include-runtime -d systemimage-selftest/out/selftest-v2.jar
+```
+
+### 4.2 运行
+
+```sh
+# 夹具对账（清单已落盘时；fixtures 相对路径自动向上查找）
+java -jar systemimage-selftest/out/selftest-v2.jar \
+  codec-selftest/fixtures/v2/fixtures-v2.json
+
+# 夹具对账 + 冒烟（冒烟镜像用 mkdisk.sh 现场造）
+java -jar systemimage-selftest/out/selftest-v2.jar \
+  codec-selftest/fixtures/v2/fixtures-v2.json /tmp/codec-v2-smoke.img
+
+# 环境变量形式（等价；缺清单 → SKIP）
+VMD_FIXTURES_V2=codec-selftest/fixtures/v2/fixtures-v2.json \
+VMD_SMOKE_IMAGE=/tmp/codec-v2-smoke.img \
+java -jar systemimage-selftest/out/selftest-v2.jar
+```
+
+| 参数/环境变量 | 含义 |
+|---|---|
+| 参数 1 / `VMD_FIXTURES_V2` | 夹具清单路径（缺省自动查找；**缺失只 SKIP**） |
+| 参数 2 / `VMD_SMOKE_IMAGE` | 冒烟镜像路径（缺省跳过冒烟） |
+| `VMD_SELFTEST_VERSION_CODE` | 模拟应用 versionCode（缺省 1；APP_TOO_OLD 对账用） |
+| `VMD_SELFTEST_SKIP_FULL` | `=1` 时跳过阶段 4 全量 root sha（夹具多/盘慢时加速） |
+
+退出码 0 = 全部通过（每行 `PASS`/`FAIL`/`SKIP`/`WARN`，末行汇总）。本机实测：
+**37 passed, 0 failed, 0 skipped, 1 warnings**（夹具 25 条 ok=3/reject=22 逐条一致 +
+合成 9 条 + 冒烟 3 条；1 WARN 为 `/vmlinuz` 摘要 —— `--kernel` 为 gzip 形态时 ESP 存展开
+`Image`，`kernel_sha256` 取自原始入参，属预期）。
+
+> 清单 `reason` 字段是 **mkdisk.sh --verify（oracle，D11）实录文案**而非枚举名；
+> `SelfTestV2.expectedReasonOf()` 内置 文案前缀 → §5/§8 十一项 reason 的映射（枚举名
+> 直接命中时原样采用）。v2 reason 集合见 `VmdDiskReason`（BootGuard 集成侧的映射由
+> BootGuard 工位补 `LEGACY_FORMAT` 枚举后统一做，本目录不改 `BootGuard.kt`）。
+
+### 4.3 纯度检查（同 §3）
+
+```sh
+grep -rn "^import android" \
+  app/src/main/java/io/github/ltbkq/vmdroid/systemimage/{VmdDiskCodec,EspFat32,MiniJson}.kt
+# 期望：无输出（0 个 android.* import）
+```
