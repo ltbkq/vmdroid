@@ -85,6 +85,21 @@
 **体积**：2026-10-08 起不再受 ≤150 MB 约束（见 `docs/reviews/IMPLEMENTATION-NOTES.md`），
 仅 `fedora-minimal.img` 保留 **≤500 MB** 硬校验。
 
+## v2 磁盘镜像迭代（2026-10-12，开发态，**未发布**）
+
+系统镜像从「裸 squashfs + footer」升级为**标准完整磁盘镜像**：GPT 分区表 + 保护性 MBR +
+UEFI 引导（GRUB/ESP）+ **可写 ext4 根分区** + raw 元数据分区（`VMDIMG02`），分发用 `.img.zst`。
+收益：`gparted`/`fdisk`/`debugfs` 等标准工具直接可用；PC 一条 `qemu-system-aarch64 -bios … -drive`
+启动到 `Ready!`（内核随镜像走，与 APK 解耦）；应用内**启动过程全程可见**（固件→GRUB→内核→initramfs）。
+
+- 文档：设计 `docs/DESIGN-disk-image-v2.md` 与规格 `docs/IMAGE-FORMAT-v2.md`（**均已冻结**）·
+  测试计划 `docs/TESTPLAN-disk-image-v2.md` · 实测记录 `docs/spikes/M0-runbook.md`
+- 当前绿线：格式四方对账 25/25 · 应用单测 435/0 · v1 selftest 56/0（兼容不倒退）·
+  v2 selftest 34/0 · M2 QEMU 四轮 25/25（含扩容与 R7 meta 回写 → 扩容后 `VERIFY_OK`）· APK 出包
+- 未发布阻塞项：真机（QEMU/AVF）验证与 P0-1 探测 · 真 rootfs `--stage ready` 冒烟（需一次 sudo）·
+  CI 补 `assets/bin/zstd`（aarch64 静态）· 发布链（catalog schema2 真资产 + 文档/guide 全量同步）
+- 旧格式镜像在 v2 应用里会被 `LEGACY_FORMAT` 拒绝并提示重新获取（硬切换，无双栈）
+
 ## 构建与测试
 
 ```sh
@@ -140,6 +155,12 @@ local-test.sh           本地「构建 → 装机 → 启动 → 取证」脚�
 | M3 | 镜像管理：导入/校验/激活/删除/BootGuard + 启动镜像选择控件 | ✅ 完成（`systemimage-selftest` 56/56 覆盖 §13.2） |
 | M4 | 镜像目录 + 断点续传 + 通知进度 + 镜像页 | ✅ 完成（目录签名链 2026-10-09 闭环） |
 | M5 | 恢复出厂（清零重建 `storage.img`） | ✅ 已实现（镜像页 Factory reset），专项回归待跑 |
+| — | **v2 迭代（2026-10-12 起，详见上文专节）** | |
+| M0-v2 | 设计评审（R5）+ P0 spikes（UEFI 链六轮/固件选型/参数通道/时延分档 D10） | ✅ 完成（P0-1/P0-4 待设备与真实构建） |
+| M1-v2 | 格式冻结 + `mkdisk.sh` + 夹具 25 + Kotlin codec 四方对账 + 打包/目录管线 v2 | ✅ 完成 |
+| M2-v2 | `init-podroid v2`（PARTUUID/挂载/扩容+R7 回写）+ QEMU 四轮 25/25 | ✅ 完成（真 rootfs ready 冒烟待 sudo） |
+| M3-v2 | Store/目录/下载/双引擎/启动可视化 切 v2（v1 兼容共存） | ✅ 主体完成（TBD-1 方案 b、缓存清理 UI 待做） |
+| M4-v2 | 发布迁移：真机验证 + catalog schema2 上架 + 文档/guide 全量同步 | ⏳ 待设备/发布窗口 |
 | M6 | 真机双后端矩阵回归 + 诊断 UI + 全站四态审计 | 🔄 进行中（本地回归套件全绿，真机矩阵待跑） |
 | M7 | Release、签名、catalog + `.sig`、文档 | ✅ 基本完成（`v1.3.0` 已发布；CI 待补） |
 

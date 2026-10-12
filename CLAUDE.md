@@ -37,7 +37,7 @@ All native/VM components are coordinated by `build-all.sh` (Docker-cached):
 ```bash
 ./build-all.sh kernel      # custom kernel only (podroid_kernel.config)
 ./build-all.sh initramfs   # kernel + minimal initramfs
-./build-all.sh rootfs      # Alpine squashfs -> app/src/main/assets/alpine-rootfs.squashfs
+./build-all.sh rootfs      # Alpine squashfs -> app/src/main/assets/alpine-rootfs.squashfs (v1 路径；v2 用 distro-build/pack-v2.sh 产 .img+.img.zst)
 ./build-all.sh qemu        # QEMU + native helpers via Docker (slow first time)
 ./build-all.sh apk         # Android APK via Gradle
 ./build-all.sh all         # everything
@@ -94,8 +94,18 @@ On **AVF** there is no QMP and no PL011: the console is captured via `ConsoleFan
 
 ### Boot pipeline
 
+> **v2 迭代（2026-10-12 已实现，发布迁移中）**：系统镜像改为**完整磁盘镜像**（GPT + UEFI 引导
+> + 可写 ext4 根分区），设计与规格见 `docs/DESIGN-disk-image-v2.md` / `docs/IMAGE-FORMAT-v2.md`
+> （均已冻结），测试计划 `docs/TESTPLAN-disk-image-v2.md`，全程实测记录 `docs/spikes/M0-runbook.md`。
+> **v2 关键变化**：boot 走 `-bios QEMU_EFI.fd` → GRUB(ESP) → 内核（无 `-kernel/-initrd/-append`）；
+> guest init 换 `init-podroid-v2`（PARTUUID 校验挂 p3 root、/home bind 到 vda、扩容 + meta 回写，
+> 见 DESIGN §4.1/§6.5/R7）；应用侧新增 `VmdDiskCodec`/`EspFat32`/`ZstdInflator`/`SystemImageFormat`/
+> `VmdDiskProbe`/`EspPayloadExtractor`/`HomeBootLog`；工具链新增
+> `Podroid-Debian/tools/{mkdisk.sh,pc-boot-smoke-v2.sh}`、`distro-build/{pack-v2.sh,check-manifest-v2.py}`
+> 与 `mkcatalog.sh` 的 `SCHEMA=2`。以下为 **v1 路径**（当前发布物仍走 v1；v1 代码原样保留供迁移期共存）：
+
 1. The engine launches the VM and starts the boot monitor (`QemuBootMonitor.kt` for QEMU; the console stream for AVF). `BootStageDetector.kt` scans the rolling console buffer (last ~1KB, not per-`read()` chunk - fast devices split markers like `Ready!` across reads).
-2. **`init-podroid`** (initramfs, ~45 lines): mounts the persistent ext4 (`/dev/vda` → upper) and the read-only squashfs (`/dev/vdb` → lower), stacks an overlayfs, moves the mounts into the new root, and `switch_root`s into `/sbin/init` (busybox).
+2. **`init-podroid`** (initramfs, ~45 lines; **v1**): mounts the persistent ext4 (`/dev/vda` → upper) and the read-only squashfs (`/dev/vdb` → lower), stacks an overlayfs, moves the mounts into the new root, and `switch_root`s into `/sbin/init` (busybox).
 3. Busybox `/sbin/init` reads `/etc/inittab` and starts **OpenRC** (runlevels are pre-symlinked at build time - chroot-into-aarch64 doesn't work on an x86_64 builder).
 4. OpenRC services on the squashfs do all system bringup:
    - `podroid-bootstrap` - kernel modules, cgroup v2, devpts/shm/mqueue, sysctl, ZRAM swap, `mount --make-rshared /`, container dirs.
@@ -168,11 +178,12 @@ Single-activity Compose app: `ui/navigation/NavGraph.kt` routes `setup → home 
 │       │   ├── x11/                      # X11/VNC viewer engine
 │       │   └── ui/                       # Compose: navigation, theme, screens/{setup,home,terminal,settings,x11,status,backup}, components
 │       ├── res/values, res/values-zh/    # strings (EN + Chinese)
-│       ├── assets/                       # vmlinuz-virt, initrd.img, alpine-rootfs.squashfs (all gitignored, built locally),
-│       │                                 # qemu/, colors/ (122), fonts/ (13), ui-fonts/
+│       ├── assets/                       # vmlinuz-virt, initrd.img, alpine-rootfs.squashfs (all gitignored, built locally — 均为 v1 路径),
+│       │                                 # qemu/ (+ QEMU_EFI.fd v2 UEFI 固件, 2MB, 见其 NOTICE; bin/zstd CI 待补), colors/ (122), fonts/ (13), ui-fonts/
 │       └── jniLibs/arm64-v8a/            # native executables (see below)
 ├── terminal-view/, terminal-emulator/   # vendored Termux fork (local Gradle modules)
-├── init-podroid                         # initramfs bootstrap: overlay + switch_root
+├── init-podroid                         # initramfs bootstrap (v1): overlay + switch_root
+├── init-podroid-v2                      # initramfs bootstrap (v2): GPT p3 root + PARTUUID 校验 + /home bind + 扩容/meta 回写 (DESIGN §4.1)
 ├── podroid-bridge.c                     # PTY <-> virtio-console relay -> libpodroid-bridge.so
 ├── podroid-launcher.c                   # exec wrapper that ties QEMU's lifetime to the app -> libpodroid-launcher.so
 ├── Dockerfile                           # kernel + initramfs + QEMU build
@@ -205,7 +216,7 @@ The terminal emulator JNI is built from the vendored `terminal-emulator` module 
 - `-serial unix:serial.sock` (boot log) + a `virtio-serial-pci` bus carrying three virtconsoles: `terminal.sock` (hvc0), `ctrl.sock` (hvc1), `host.sock` (hvc2, the host bridge - **order matters**, the guest expects host bridge on hvc2).
 - `-qmp unix:qmp.sock` for runtime port forwards + USB.
 - RAM, CPU count, and user-editable extras (`-cpu`, `-accel`, RNG, etc.) from `SettingsRepository`.
-- Two virtio block devices: `/dev/vda` ← `storage.img` (writable ext4 overlay upper, resized on first boot), `/dev/vdb` ← `alpine-rootfs.squashfs` (read-only zstd lower).
+- Two virtio block devices: `/dev/vda` ← `storage.img` (writable ext4 overlay upper, resized on first boot), `/dev/vdb` ← `alpine-rootfs.squashfs` (read-only zstd lower). **v2**: vdb 改为**可写**的 GPT 磁盘镜像（`images/<id>.img`，`readonly=on` 移除 + `discard=unmap`；v2 启动时另加 `-bios`）。
 - SLIRP networking; `-device qemu-xhci` when USB passthrough is enabled.
 
 ## Build pipelines

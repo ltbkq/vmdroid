@@ -135,6 +135,11 @@
         </tbody>
       </table>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The <strong>Storage size</strong> row and <strong>Reset VM</strong> row above describe v1. In v2 the guest is a full disk image (GPT + UEFI + writable ext4 root) with a separate data disk, so Settings gains a <strong>system disk capacity</strong> tier list (2 / 4 / 8 / 16 / 32 GiB, default 4 GiB) alongside the existing data-disk size, and factory reset becomes <strong>two operations</strong>: <em>clear data</em> (zero the data disk, keeps the system image - seconds) and <em>reinstall system</em> (restore the factory root from the cached <code>.img.zst</code>, or re-download it - minutes). The settings page also shows image and cache usage and lets you clear the cached <code>.img.zst</code> (which gives up offline reinstall). Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <h3>Connectivity</h3>
       <table>
         <thead>

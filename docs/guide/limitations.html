@@ -145,6 +145,11 @@
         </tbody>
       </table>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The <em>Storage</em> row above is v1-specific. In v2 the guest is a full disk image (GPT + UEFI + writable ext4 root) and the storage story changes: the system image is distributed compressed as <code>.img.zst</code> (download in the same order of magnitude as v1, target &le; 1.5&times;), the system root gets its own capacity tiers (2 / 4 / 8 / 16 / 32 GiB, default 4 GiB) next to the existing grow-only data disk, and factory reset splits into two operations - <strong>clear data</strong> (fast, leaves the system image alone) and <strong>reinstall system</strong> (minutes, restores the factory root; the cached <code>.img.zst</code> makes it offline-capable). The UEFI/GRUB firmware stage adds boot latency: measured <strong>+9.13 s on PC/TCG</strong> against a &le; +10 s budget, &le; +5 s for phone QEMU and &le; +2 s for AVF. Old-format (v1) images are rejected as <code>LEGACY_FORMAT</code>. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <h2>Troubleshooting</h2>
 
       <h3>VM dies or "QEMU crashed (SIGKILL)" when I switch apps</h3>

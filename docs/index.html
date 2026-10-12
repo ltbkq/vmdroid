@@ -819,6 +819,8 @@
     <h2>How it works</h2>
     <p class="section-sub">Five sockets, one VM, zero root. Here's what happens when you tap Start.</p>
 
+    <p class="section-sub"><strong>v2 迭代（开发中） · v2 iteration (in development):</strong> the diagram and boot steps below describe the current v1 release. The next image format ships the guest as a complete disk image (GPT + UEFI + writable ext4 root) booted through UEFI/GRUB, so the squashfs lower + ext4 overlay upper shown here is replaced by a writable root partition, the data disk keeps user data (<code>/home</code> is bind-mounted from it), factory reset becomes two-level (clear data / reinstall system), and images in the old format will no longer be supported. Details: <a href="DESIGN-disk-image-v2.md"><code>DESIGN-disk-image-v2.md</code></a>.</p>
+
     <div class="arch-diagram"><span class="arch-white">┌────────────────────── Android App (Compose) ─────────────────────────┐
 │                                                                      │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐    │

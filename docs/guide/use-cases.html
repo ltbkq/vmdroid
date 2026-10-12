@@ -120,6 +120,11 @@
       <p>Once SSH is working, VS Code Remote-SSH and JetBrains Gateway both connect without any plugin beyond their standard remote-development extension. The phone acts exactly like any remote Linux server from the laptop's point of view.</p>
       <p>Persistence is handled by the overlayfs stack: all writes go to the ext4 <code>storage.img</code>. Packages you install with <code>apk add</code>, files you create, services you enable with <code>rc-update add</code> - all survive reboots and app updates.</p>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The overlayfs persistence described above is how v1 works. In v2 the guest root is itself a writable ext4 partition inside a GPT disk image, so <code>apk add</code>, config edits and <code>rc-update add</code> land directly in the image's writable root with no overlay layer in between; <code>/home</code> is bind-mounted from the data disk, so home directories and containers on the data disk survive a system reinstall. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <div class="callout tip">
         <span class="label">IO-bound vs CPU-bound work</span>
         <p>Text editing, shell scripting, Git operations, and short Python scripts are comfortable on TCG - these workloads spend most time on IO and memory, where the emulation overhead is low. Long compilations (LLVM, Linux kernel, large Rust projects) will be painfully slow; for those, prefer cross-compiling on the laptop and copying binaries over SSH.</p>

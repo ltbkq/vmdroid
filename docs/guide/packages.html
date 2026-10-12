@@ -51,6 +51,11 @@
       <h1>Packages &amp; services</h1>
       <p class="lead">The VM is a standard Alpine Linux system. Install packages with <code>apk</code> as you would on any Alpine machine. Changes persist across reboots on the writable ext4 overlay.</p>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>Persistence in v2 no longer runs through an overlay. The guest root is itself a writable ext4 partition of the disk image, so <code>apk add</code> output (and every other system change) is written straight into the image's writable root instead of being redirected to an overlay upper layer. <code>/home</code> is bind-mounted from the data disk, so home directories and containers on the data disk outlive a system reinstall. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <h2>Package management with apk</h2>
       <p>Both the <strong>main</strong> and <strong>community</strong> repositories are pre-configured in <code>/etc/apk/repositories</code>. Any package available on Alpine 3.24 for aarch64 can be installed directly.</p>
 

@@ -133,6 +133,11 @@
         </tbody>
       </table>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The last two rows - the overlay mount options and <code>metacopy=on</code> - belong to the v1 squashfs + overlay model. In v2 the guest root is a plain writable ext4 partition inside a GPT disk image, so those overlayfs knobs disappear entirely. What changes instead is size and startup: the system image is distributed as a compressed <code>.img.zst</code> (download size in the same order of magnitude as v1, target &le; 1.5&times;, decompressed sparsely on install), and boot gains a UEFI + GRUB firmware stage - measured <strong>+9.13 s on PC/TCG</strong> against a &le; +10 s budget, with &le; +5 s targeted for phone QEMU and &le; +2 s for AVF. Everything else on this page (TCG cost, double-JIT, iothreads, ZRAM) still applies. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <h2>What won't help without root</h2>
       <p>Some common Linux performance tricks are simply unavailable on a stock Android device: <code>io_uring</code> is blocked by Android 12+ seccomp policy; CPU affinity (<code>taskset</code>) requires elevated scheduling permissions; KSM memory deduplication is a kernel knob; huge pages on the host are not user-configurable; TAP networking requires a TUN/TAP device. These are hard limits, not oversights.</p>
 

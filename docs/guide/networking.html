@@ -265,6 +265,11 @@ pasv_addr_resolve=NO
       <h3>NFS and iSCSI</h3>
       <p>The kernel ships an NFSv4 server and client, so the guest can serve NFS - with one constraint. The export must live on an ext4-backed path such as <code>/mnt/persist</code> and be exported with <code>fsid=0</code>, because the overlay root cannot produce NFS filehandles by design. Note that Windows' own NFS client speaks version 3, which also needs the portmapper on port 111 - privileged, so Windows still cannot reach it. The kernel also ships the LIO iSCSI target (<code>targetcli</code>, with fileio and iblock backstores) and the TCP initiator.</p>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The overlay-root restriction above is a v1 property. In v2 the guest root is a normal writable ext4 partition of the disk image (booted via UEFI/GRUB), so the root filesystem itself can back NFS exports like any other ext4 mount - <code>fsid=0</code> remains required for the NFSv4 export root, and the rest of this page (ports, SLIRP, forwards) is unaffected by the image format change. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <h3>What cannot work</h3>
       <p>These are not missing features, they are consequences of running as an ordinary app on a stock phone:</p>
 

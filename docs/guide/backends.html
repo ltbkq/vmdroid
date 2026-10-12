@@ -64,6 +64,11 @@
         <p>Changing the backend setting takes effect at the next VM start. The VM must be stopped before you switch.</p>
       </div>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The launch arguments below describe the current release (v1), which hands the kernel to QEMU directly. In v2 the guest boots as a UEFI disk image: the <strong>QEMU</strong> backend starts with a UEFI firmware via <code>-bios</code> and lets GRUB on the ESP load the kernel and initrd, while the <strong>AVF</strong> backend has no firmware path, so the app parses the ESP itself, extracts the kernel and initrd, and boots them directly - with the boot process visible inside the app either way. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <h2>QEMU (TCG)</h2>
       <p>The QEMU backend is the default and works on <strong>any ARM64 Android 8+ device</strong> with no setup beyond installing the app. The guest CPU is emulated in software via TCG (Tiny Code Generator). See <a href="performance.html">Performance &amp; why it's slow</a> for a full explanation of where the overhead comes from and what Podroid does to reduce it. The short version: simple workloads are 2-5x slower than native; JIT-heavy workloads (Node, JVM, compilers) are slower still because of double-JIT and cold-cache process-spawn costs.</p>
 

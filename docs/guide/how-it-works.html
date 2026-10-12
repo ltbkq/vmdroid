@@ -70,6 +70,11 @@
       <p>A minimal initramfs boots first. It mounts both block devices, stacks them with <strong>overlayfs</strong> (squashfs as lower, ext4 as upper), then calls <code>switch_root</code> to hand control to the real Alpine root. From that point on the guest sees a single unified filesystem, with writes silently redirected to the ext4 overlay.</p>
 
       <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The squashfs + overlayfs model described above is how the current release (v1) works. The next image format replaces it: the guest ships as a complete disk image (GPT + UEFI + a writable ext4 root), so there is no lower/upper stack and no <code>switch_root</code> pivot over an overlay - boot goes through UEFI and GRUB, and system changes land directly in the image's writable root. From v2 onwards <code>/home</code> is bind-mounted from the data disk, so home directories survive image swaps and reinstalls while system changes live in the image. Factory reset becomes two-level (clear data / reinstall system), and images in the old format will no longer be supported. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
+      <div class="callout note">
         <span class="label">Why switch_root, not chroot?</span>
         <p>An earlier version used <code>chroot</code> to pivot into the overlay. That broke <code>podman exec -it</code>: when <code>crun</code> calls <code>setns(MNT)</code> to enter a container's namespace, it resets the root, and exec'd processes saw raw kernel paths like <code>/mnt/overlay/proc</code> instead of <code>/proc</code>. <code>switch_root</code> reorganizes the kernel mount tree itself, so namespace forks always see a clean <code>/</code>.</p>
       </div>

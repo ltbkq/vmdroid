@@ -62,6 +62,11 @@
       <p>Plain overlayfs (without <code>metacopy</code>, <code>index</code>, or <code>redirect_dir</code>) does not bind the upper to a specific lower. Swapping in a new squashfs and rebooting is enough to pick up updated system files, while the upper layer remains untouched. This is the entire mechanism - no migration tooling is needed for ordinary file updates.</p>
 
       <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The lower/upper model above describes the current release (v1). In v2 there is no overlay at all: the guest root is a single writable ext4 partition inside a GPT disk image, so there is no lower image to swap underneath a persistent upper. "Updating the system" becomes <strong>reinstalling the system image</strong> (the data disk - <code>storage.img</code> with <code>/home</code> - stays untouched), a v1-format image is detected and rejected as <code>LEGACY_FORMAT</code>, and there is deliberately no in-place v1&rarr;v2 conversion: converting would amount to a reinstall, so old images must be fetched again. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
+      <div class="callout note">
         <span class="label">One caveat</span>
         <p>If you changed a file that also changed in the new system layer, and your change was metadata-only (permissions, ownership, timestamps) rather than content, the upper's metadata entry shadows the new lower file. This is rare and easy to resolve: delete the upper's copy with <code>rm</code> and the new system version appears immediately. Content changes always win because the upper copy takes precedence over the lower.</p>
       </div>

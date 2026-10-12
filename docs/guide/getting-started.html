@@ -97,6 +97,11 @@
       </ul>
       <p>The notification shows boot stages as they complete: "Starting SSH...", "Almost ready...", then "Ready!" - at which point the VM is fully up and the terminal is interactive.</p>
 
+      <div class="callout note">
+        <span class="label">v2 迭代（开发中） · v2 iteration (in development)</span>
+        <p>The timings above describe v1, which hands the kernel to QEMU directly. In v2 the guest boots as a complete disk image (GPT + UEFI + writable ext4 root): UEFI firmware and GRUB load the kernel from the ESP first, which adds a visible startup stage - measured <strong>+9.13 s on PC/TCG</strong> against a &le; +10 s budget, with &le; +5 s targeted for phone QEMU and &le; +2 s for AVF. Your writable data disk keeps its role from step 1; the system root becomes a separate, capacity-tiered partition, and factory reset later splits into "clear data" / "reinstall system". Old-format images will no longer be supported. Details: <a href="../DESIGN-disk-image-v2.md"><code>docs/DESIGN-disk-image-v2.md</code></a>.</p>
+      </div>
+
       <h2>Home screen at a glance</h2>
       <p>Once the VM is running the home screen shows:</p>
       <ul>
