@@ -13,23 +13,25 @@
 评审规程 [docs/REVIEW.md](docs/REVIEW.md) ·
 测试与整改 [docs/TESTPLAN-system-images.md](docs/TESTPLAN-system-images.md) / [docs/FIXLIST-system-images.md](docs/FIXLIST-system-images.md)
 
-**下载**：[APK Release `v1.3.0`](https://github.com/ltbkq/vmdroid/releases/tag/v1.3.0) ·
+**下载**：[APK Release `v2.0.0`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.0) ·
 
-[系统镜像 Release `system-images-2026.10.08`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08)
+[系统镜像 Release `system-images-v2-2026.10.12`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12)（五品类 `.img.zst` + schema2 `catalog.json`）
+
+上一代（v1 应用专用，归档）：[APK `v1.3.0`](https://github.com/ltbkq/vmdroid/releases/tag/v1.3.0) · [镜像 `system-images-2026.10.08`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08)
 
 ## 核心目的
 
-1. **软件与系统分开** —— VMDroid APK（**v1.3.0**，≈47 MB）只含虚拟机（引擎、内核、initrd、终端、VNC、桥接），
-   **不含任何发行版 rootfs**。
-2. **系统可以更换** —— 系统是一个独立的 `.img` 文件，换系统 = 换文件，
+1. **软件与系统分开** —— VMDroid APK（**v2.0.0**，≈41 MB）只含虚拟机（引擎、终端、VNC、桥接、镜像管理），
+   **不含任何发行版 rootfs，也不再内置内核/initrd**（v2 起随镜像走）。
+2. **系统可以更换** —— 系统是一个独立的 `.img`（分发为 `.img.zst`，应用内解压为稀疏 `.img`），换系统 = 换文件，
    不重装应用、不改应用代码。新系统**只上架镜像，应用零更新**。
 
 ```
-┌────────── VMDroid APK (v1.3.0 · ≈47 MB) ────┐      ┌─── 系统镜像 .img (185–543 MB) ─┐
-│ VM 引擎(QEMU/AVF) │ 内核+initrd │ UI         │      │ rootfs.squashfs  → vdb (只读)   │
-│ 终端/VNC/USB/桥接 │ ★镜像管理器 + 签名目录     │ ───▶ │ + kernel/initrd → PC 可启动      │
-└──────────────────────────────────────────────┘      │ + manifest + 校验和 (尾部)       │
-                                                      └──────────────────────────────────┘
+┌──────── VMDroid APK (v2.0.0 · ≈41 MB) ────┐      ┌── 系统镜像 .img.zst (155–442 MB) ──┐
+│ VM 引擎(QEMU/AVF) │ UI + 镜像管理器         │      │ GPT 分区表: ESP(GRUB+内核+initrd)  │
+│ 终端/VNC/USB/桥接 │ 签名目录 + zst 安装     │ ───▶ │  + 可写 ext4 根 + meta(VMDIMG02)   │
+│ ★ UEFI(-bios) 启动链 · 启动过程可视化       │      │ 解压为稀疏 .img → vda 数据/vdb 系统 │
+└────────────────────────────────────────────┘      └────────────────────────────────────┘
 ```
 
 ## 快速开始
