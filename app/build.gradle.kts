@@ -25,8 +25,9 @@ android {
         applicationId = "io.github.ltbkq.vmdroid"
         minSdk = 26
         targetSdk = 36
-        versionCode = 34
-        versionName = "1.3.0"
+        // v2 迭代：磁盘镜像格式 format_version=2 / 目录 schema2 / v1 镜像 LEGACY 拒绝（破坏性，major 对齐）
+        versionCode = 35
+        versionName = "2.0.0"
         buildConfigField("String", "QEMU_VERSION", "\"$vmdroidQemuVersion\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

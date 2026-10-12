@@ -85,7 +85,7 @@
 **体积**：2026-10-08 起不再受 ≤150 MB 约束（见 `docs/reviews/IMPLEMENTATION-NOTES.md`），
 仅 `fedora-minimal.img` 保留 **≤500 MB** 硬校验。
 
-## v2 磁盘镜像迭代（2026-10-12，开发态，**未发布**）
+## v2 磁盘镜像迭代（APK **2.0.0 / versionCode 35**）
 
 系统镜像从「裸 squashfs + footer」升级为**标准完整磁盘镜像**：GPT 分区表 + 保护性 MBR +
 UEFI 引导（GRUB/ESP）+ **可写 ext4 根分区** + raw 元数据分区（`VMDIMG02`），分发用 `.img.zst`。
@@ -94,10 +94,10 @@ UEFI 引导（GRUB/ESP）+ **可写 ext4 根分区** + raw 元数据分区（`VM
 
 - 文档：设计 `docs/DESIGN-disk-image-v2.md` 与规格 `docs/IMAGE-FORMAT-v2.md`（**均已冻结**）·
   测试计划 `docs/TESTPLAN-disk-image-v2.md` · 实测记录 `docs/spikes/M0-runbook.md`
-- 当前绿线：格式四方对账 25/25 · 应用单测 435/0 · v1 selftest 56/0（兼容不倒退）·
-  v2 selftest 34/0 · M2 QEMU 四轮 25/25（含扩容与 R7 meta 回写 → 扩容后 `VERIFY_OK`）· APK 出包
-- 未发布阻塞项：真机（QEMU/AVF）验证与 P0-1 探测 · 真 rootfs `--stage ready` 冒烟（需一次 sudo）·
-  CI 补 `assets/bin/zstd`（aarch64 静态）· 发布链（catalog schema2 真资产 + 文档/guide 全量同步）
+- **镜像已上架**：Release [`system-images-v2-2026.10.12`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12)（prerelease，7 资产：五品类 `.img.zst` + schema2 `catalog.json` + 签名；应用默认目录已指向该 tag）
+- 绿线：格式四方对账 25/25 · 应用单测 450/0 · v1 selftest 56/0（兼容不倒退）· v2 selftest 34/0 ·
+  M2 QEMU 四轮 25/25（扩容 R7 meta 回写 → `VERIFY_OK`）· **五品类 L1–L4 全过（Ready! 5/5）** · APK 出包
+- 待办：真机（QEMU/AVF）验证与 P0-1 探测 · **APK 2.0.0 发版** · 真机 W^X 复测（`bin/zstd` 已入库）
 - 旧格式镜像在 v2 应用里会被 `LEGACY_FORMAT` 拒绝并提示重新获取（硬切换，无双栈）
 
 ## 构建与测试
