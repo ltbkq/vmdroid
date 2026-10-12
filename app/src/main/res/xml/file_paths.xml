@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <files-path name="logs" path="." />
+    <!-- In-app updates: filesDir/update/<version>/*.apk served to the system
+         installer as a content:// URI (ApkUpdater.installUpdate). Appended
+         without touching the existing `logs` root; FileProvider picks the
+         longest matching root, so update files resolve under `updates`. -->
+    <files-path name="updates" path="update/" />
 </paths>

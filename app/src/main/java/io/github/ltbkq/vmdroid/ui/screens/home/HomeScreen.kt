@@ -39,6 +39,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -69,6 +70,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ltbkq.vmdroid.BuildConfig
 import io.github.ltbkq.vmdroid.R
+import io.github.ltbkq.vmdroid.data.repository.UpdateState
 import io.github.ltbkq.vmdroid.engine.VmState
 import io.github.ltbkq.vmdroid.engine.avf.AvfFailureGuidance
 import io.github.ltbkq.vmdroid.service.VmdroidService
@@ -106,7 +108,8 @@ fun HomeScreen(
     val vmState by viewModel.vmState.collectAsStateWithLifecycle()
     val bootStage by viewModel.bootStage.collectAsStateWithLifecycle()
     val bootLog by viewModel.bootLog.collectAsStateWithLifecycle()
-    val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
+    val updateInfo by viewModel.bannerInfo.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val meta by viewModel.meta.collectAsStateWithLifecycle()
     val uptimeTick by viewModel.uptimeTicker.collectAsStateWithLifecycle()
     val showAvfHint by viewModel.showAvfHint.collectAsStateWithLifecycle()
@@ -200,26 +203,106 @@ fun HomeScreen(
             onDismissRequest = { viewModel.dismissUpdate() },
             icon  = { Icon(Icons.Default.SystemUpdate, contentDescription = stringResource(R.string.update_available)) },
             title = { Text(stringResource(R.string.update_available)) },
-            text  = { Text(stringResource(R.string.version_available, info.latestVersion, BuildConfig.VERSION_NAME)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    // Guard against ActivityNotFoundException (no browser) or a
-                    // blank/malformed releaseUrl from the remote JSON source.
-                    // Surface a toast on failure so the tap isn't a silent no-op.
-                    runCatching {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl)))
-                    }.onFailure {
-                        android.widget.Toast.makeText(
-                            context,
-                            context.getString(R.string.update_open_failed),
-                            android.widget.Toast.LENGTH_LONG,
-                        ).show()
+            text  = {
+                // 与原横幅一致的 AlertDialog 样式，只把正文按状态机展开：
+                // 版本行恒在 → 下载中加进度条 → 已就绪/失败给可执行的一行说明。
+                Column(verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM)) {
+                    Text(stringResource(R.string.version_available, info.latestVersion, BuildConfig.VERSION_NAME))
+                    when (val st = updateState) {
+                        is UpdateState.Downloading -> {
+                            Text(
+                                text = stringResource(R.string.update_status_downloading, st.percent),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            LinearProgressIndicator(
+                                progress = { st.percent / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        is UpdateState.Ready -> Text(
+                            text = stringResource(R.string.update_status_ready),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        is UpdateState.Failed -> {
+                            Text(
+                                text = stringResource(R.string.update_status_failed),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            // 失败也给「打开发布页」的退路（重试是确认按钮）。
+                            TextButton(onClick = {
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl)))
+                                }.onFailure {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        context.getString(R.string.update_open_failed),
+                                        android.widget.Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }) { Text(stringResource(R.string.update_open_release_page)) }
+                        }
+                        else -> if (!info.canAutoDownload) {
+                            // 降级原因（无 APK 资产 / 无校验和）——仍然只跳网页。
+                            Text(
+                                text = stringResource(
+                                    if (info.apk == null) R.string.update_no_apk_hint
+                                    else R.string.update_no_checksum_hint
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
-                    viewModel.dismissUpdate()
-                }) { Text(stringResource(R.string.download)) }
+                }
+            },
+            confirmButton = {
+                when (val st = updateState) {
+                    is UpdateState.Ready -> TextButton(onClick = {
+                        // 半自动更新的最后一步：Android 无静默安装，交给系统安装器
+                        // （用户确认页）；启动失败回退到发布页。
+                        if (!viewModel.installUpdate()) {
+                            android.widget.Toast.makeText(
+                                context,
+                                context.getString(R.string.update_open_failed),
+                                android.widget.Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }) { Text(stringResource(R.string.update_install)) }
+                    is UpdateState.Failed -> TextButton(onClick = {
+                        // 主动重试绕过下载失败退避门。
+                        viewModel.downloadUpdate()
+                    }) { Text(stringResource(R.string.update_retry)) }
+                    is UpdateState.Downloading -> { /* 进度已在正文展示，暂无确认动作 */ }
+                    else -> if (info.canAutoDownload) {
+                        // 开始静默下载 —— 横幅随状态机切到「下载中」，不收起。
+                        TextButton(onClick = { viewModel.downloadUpdate() }) {
+                            Text(stringResource(R.string.download))
+                        }
+                    } else {
+                        // 无应用内下载条件 → 保持旧行为：浏览器打开发布页并收起。
+                        TextButton(onClick = {
+                            // Guard against ActivityNotFoundException (no browser) or a
+                            // blank/malformed releaseUrl from the remote JSON source.
+                            // Surface a toast on failure so the tap isn't a silent no-op.
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl)))
+                            }.onFailure {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    context.getString(R.string.update_open_failed),
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                            viewModel.dismissUpdate()
+                        }) { Text(stringResource(R.string.update_open_release_page)) }
+                    }
+                }
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.dismissUpdate() }) { Text(stringResource(R.string.later)) }
+                TextButton(onClick = { viewModel.dismissUpdate() }) { Text(stringResource(R.string.update_ignore_version)) }
             },
         )
     }

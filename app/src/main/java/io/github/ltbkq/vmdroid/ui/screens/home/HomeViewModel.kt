@@ -3,12 +3,13 @@ package io.github.ltbkq.vmdroid.ui.screens.home
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.ltbkq.vmdroid.BuildConfig
 import io.github.ltbkq.vmdroid.R
+import io.github.ltbkq.vmdroid.data.repository.ApkUpdater
 import io.github.ltbkq.vmdroid.data.repository.PortForwardRepository
 import io.github.ltbkq.vmdroid.data.repository.SettingsRepository
 import io.github.ltbkq.vmdroid.data.repository.UpdateInfo
 import io.github.ltbkq.vmdroid.data.repository.UpdateRepository
+import io.github.ltbkq.vmdroid.data.repository.UpdateState
 import io.github.ltbkq.vmdroid.engine.EngineHolder
 import io.github.ltbkq.vmdroid.engine.VmState
 import io.github.ltbkq.vmdroid.service.VmdroidService
@@ -69,6 +70,7 @@ class HomeViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val portForwardRepository: PortForwardRepository,
     private val updateRepository: UpdateRepository,
+    private val apkUpdater: ApkUpdater,
     private val systemImages: SystemImageRepository,
 ) : ViewModel() {
 
@@ -190,8 +192,23 @@ class HomeViewModel @Inject constructor(
     /** Phone IPv4 — cheap, lazily recomputed when the screen reads it. */
     fun phoneIp(): String = NetworkUtils.localIpv4(context)
 
-    private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)
-    val updateInfo: StateFlow<UpdateInfo?> = _updateInfo.asStateFlow()
+    // ---- §自动更新（v2.0.0）：状态由 ApkUpdater 单点持有（设置页共用）， ----
+    // ---- Home 只负责「横幅可见性」与按钮动作。                        ----
+
+    /** 更新状态机（Idle/Checking/Available/Downloading/Ready/Failed）。 */
+    val updateState: StateFlow<UpdateState> = apkUpdater.state
+
+    /**
+     * 横幅内容 = 当前跟踪的更新 − 用户已「忽略此版本」的那个。
+     * [UpdateRepository.dismissedVersion] 初始为 null（DataStore 尚未读回），
+     * 因此新发现的版本在忽略状态确定前不会闪现。
+     */
+    val bannerInfo: StateFlow<UpdateInfo?> = combine(
+        apkUpdater.state,
+        updateRepository.dismissedVersion,
+    ) { state, dismissed ->
+        state.info?.takeIf { info -> dismissed != null && info.latestVersion != dismissed }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
      * True when AVF (pKVM) is present on this device but neither
@@ -545,9 +562,11 @@ class HomeViewModel @Inject constructor(
     private fun checkForUpdate() {
         viewModelScope.launch {
             try {
-                val info = updateRepository.checkForUpdate(BuildConfig.VERSION_NAME) ?: return@launch
-                if (!updateRepository.isDismissed(info.latestVersion)) {
-                    _updateInfo.value = info
+                // ① 本地恢复（无网络）：上次已下载且 sha 复验通过的 APK 直接 Ready
+                apkUpdater.restore()
+                // ② 检查（受现有 24h 门约束；「自动检查更新」关闭则整步跳过）
+                if (updateRepository.autoCheckEnabled.first()) {
+                    apkUpdater.check()
                 }
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
@@ -558,9 +577,22 @@ class HomeViewModel @Inject constructor(
     }
 
     fun dismissUpdate() {
-        val version = _updateInfo.value?.latestVersion ?: return
-        _updateInfo.value = null
+        // 「忽略此版本」：持久化忽略号；横幅通过 bannerInfo 的 combine 自动收起，
+        // 状态机不变（设置页仍能看到该版本的状态）。
+        val version = bannerInfo.value?.latestVersion ?: return
         viewModelScope.launch { updateRepository.dismissUpdate(version) }
+    }
+
+    /** 横幅主按钮：开始/重试下载 —— 用户主动点击，绕过失败退避门。 */
+    fun downloadUpdate() {
+        val info = bannerInfo.value ?: return
+        apkUpdater.download(info, bypassGate = true)
+    }
+
+    /** 横幅「安装」：把已校验的 APK 交给系统安装器（失败回退发布页）。 */
+    fun installUpdate(): Boolean {
+        val ready = apkUpdater.state.value as? UpdateState.Ready ?: return false
+        return apkUpdater.installUpdate(ready.file, ready.info.releaseUrl)
     }
 
     fun dismissAvfHint() {

@@ -16,10 +16,13 @@ import androidx.lifecycle.viewModelScope
 import io.github.ltbkq.vmdroid.BuildConfig
 import io.github.ltbkq.vmdroid.R
 import io.github.ltbkq.vmdroid.data.repository.AddRuleResult
+import io.github.ltbkq.vmdroid.data.repository.ApkUpdater
 import io.github.ltbkq.vmdroid.data.repository.LanguageManager
 import io.github.ltbkq.vmdroid.data.repository.PortForwardRepository
 import io.github.ltbkq.vmdroid.data.repository.PortForwardRule
 import io.github.ltbkq.vmdroid.data.repository.SettingsRepository
+import io.github.ltbkq.vmdroid.data.repository.UpdateRepository
+import io.github.ltbkq.vmdroid.data.repository.UpdateState
 import io.github.ltbkq.vmdroid.di.ApplicationScope
 import io.github.ltbkq.vmdroid.engine.EngineHolder
 import io.github.ltbkq.vmdroid.engine.EngineSelection
@@ -135,6 +138,8 @@ class SettingsViewModel @Inject constructor(
     private val engine: EngineHolder,
     private val languageManager: LanguageManager,
     private val systemImages: SystemImageRepository,
+    private val updateRepository: UpdateRepository,
+    private val apkUpdater: ApkUpdater,
     @ApplicationScope private val externalScope: CoroutineScope,
 ) : ViewModel() {
 
@@ -265,6 +270,75 @@ class SettingsViewModel @Inject constructor(
 
     fun setAutostartOnBoot(value: Boolean) {
         viewModelScope.launch { settingsRepository.setAutostartOnBoot(value) }
+    }
+
+    // ---------------------------------------------------------------- 应用更新（v2.0.0）
+
+    /** 更新状态机 —— 与 Home 横幅共享同一个 [ApkUpdater] 单例。 */
+    val updateState: StateFlow<UpdateState> = apkUpdater.state
+
+    /** 「自动检查更新」开关（默认开；关掉则启动时不发起网络检查）。 */
+    val autoUpdateCheck: StateFlow<Boolean> = updateRepository.autoCheckEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    /** 「自动下载更新」开关（默认开；关掉则只提示、不落盘）。 */
+    val autoUpdateDownload: StateFlow<Boolean> = updateRepository.autoDownloadEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    fun setAutoUpdateCheck(value: Boolean) {
+        viewModelScope.launch { updateRepository.setAutoCheckEnabled(value) }
+    }
+
+    fun setAutoUpdateDownload(value: Boolean) {
+        viewModelScope.launch { updateRepository.setAutoDownloadEnabled(value) }
+    }
+
+    /** 「立即检查」：force=true 绕过 24h 缓存门（失败仍按原节奏退避）。 */
+    fun checkForUpdateNow() {
+        viewModelScope.launch {
+            try {
+                apkUpdater.check(force = true)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                Log.w(TAG, "forced update check failed", e)
+            }
+        }
+    }
+
+    /** 「下载 / 重试」：用户主动点击，绕过下载失败退避门。 */
+    fun downloadUpdate() {
+        val info = updateState.value.info ?: return
+        apkUpdater.download(info, bypassGate = true)
+    }
+
+    /** 「安装」：交给系统安装器（Android 无静默安装）；失败提示 + 回退发布页。 */
+    fun installUpdate() {
+        val ready = updateState.value as? UpdateState.Ready ?: return
+        if (!apkUpdater.installUpdate(ready.file, ready.info.releaseUrl)) {
+            _updateMessage.value = context.getString(R.string.update_open_failed)
+        }
+    }
+
+    fun openReleasePage() {
+        val info = updateState.value.info ?: return
+        if (!apkUpdater.openReleasePage(info.releaseUrl)) {
+            _updateMessage.value = context.getString(R.string.update_open_failed)
+        }
+    }
+
+    /** 「忽略此版本」：与 Home 横幅同一份持久化忽略号。 */
+    fun ignoreUpdate() {
+        val info = updateState.value.info ?: return
+        viewModelScope.launch { updateRepository.dismissUpdate(info.latestVersion) }
+    }
+
+    private val _updateMessage = MutableStateFlow<String?>(null)
+    /** One-shot update failure message; clear after showing in the snackbar. */
+    val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
+
+    fun clearUpdateMessage() {
+        _updateMessage.value = null
     }
 
     suspend fun setLanguage(value: String) {

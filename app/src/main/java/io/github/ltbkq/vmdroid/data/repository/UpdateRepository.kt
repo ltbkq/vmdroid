@@ -1,24 +1,159 @@
 package io.github.ltbkq.vmdroid.data.repository
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.github.ltbkq.vmdroid.systemimage.MiniJson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Result of an update check.
+ *
+ * [apk]/[apkSha256] describe the in-app download path; either being null does
+ * **not** fail the check — it degrades it to "open the release page in a
+ * browser" (the pre-2.0 behaviour), which is also the fail-closed answer when
+ * the release ships no APK asset or no usable checksum.
+ */
 data class UpdateInfo(
     val latestVersion: String,
     val releaseUrl: String,
+    /** APK asset chosen from the release; null = this release ships no APK. */
+    val apk: UpdateAsset? = null,
+    /** Lowercase hex sha256 of [apk]; null = no integrity value available. */
+    val apkSha256: String? = null,
+) {
+    /**
+     * True when a verified in-app download is possible at all. Fail-closed:
+     * every field (asset, checksum, download URL) must be present, otherwise
+     * the caller must fall back to opening [releaseUrl].
+     */
+    val canAutoDownload: Boolean
+        get() = apk != null && apkSha256 != null && apk.downloadUrl.isNotBlank()
+}
+
+/** One GitHub release asset, as needed by the updater. */
+data class UpdateAsset(
+    val name: String,
+    val size: Long,
+    /** `browser_download_url` — the direct, redirect-following download link. */
+    val downloadUrl: String,
+    /** Raw API `digest` field (`"sha256:<hex>"`); null when not provided. */
+    val digest: String? = null,
 )
+
+/** `v`-stripped tag must be a pure dotted version (`1`, `1.3.0`, …). */
+private val RELEASE_TAG_PATTERN = Regex("""^\d+(\.\d+)*""")
+private val APK_ASSET_PATTERN = Regex("""^vmdroid-.*\.apk$""")
+private val SHA256_HEX_PATTERN = Regex("""^[0-9a-f]{64}$""")
+/** Standard `sha256sum` line: 64 hex, whitespace, optional binary marker `*`, name. */
+private val SUMS_LINE_PATTERN = Regex("""^([0-9a-f]{64})\s+\*?(.+)$""")
+
+/**
+ * Tag guard: only plain version tags (`v1.3.0`, `2.0.0`) may reach [isNewer].
+ * The GitHub repo also carries non-app releases (e.g. `system-images-*` tags)
+ * whose names would otherwise be fed into version comparison; those return
+ * false from [isNewer] only by accident, so they are rejected here as a
+ * contract instead. Applied after a single `v` prefix strip, per release
+ * convention. Prerelease-suffixed tags (`v1.3.0-rc1`) are deliberately not
+ * matched either: `releases/latest` only ever surfaces full releases.
+ */
+internal fun isReleaseTag(tag: String): Boolean =
+    RELEASE_TAG_PATTERN.matches(tag.removePrefix("v"))
+
+/**
+ * Parses the `assets` array of a GitHub release payload. Malformed entries
+ * (missing name/URL) are skipped rather than failing the whole release.
+ * Throws [IllegalArgumentException] on an unparsable payload — callers treat
+ * that as "no assets" (degrade to the browser) instead of failing the check.
+ */
+internal fun parseReleaseAssets(json: String): List<UpdateAsset> =
+    parseReleaseAssets(MiniJson.parseObject(json))
+
+/** Map overload so the release payload is only parsed once. */
+internal fun parseReleaseAssets(root: Map<String, Any?>): List<UpdateAsset> {
+    val raw = root["assets"] as? List<*> ?: return emptyList()
+    return raw.mapNotNull { entry ->
+        val m = entry as? Map<*, *> ?: return@mapNotNull null
+        val name = MiniJson.str(m, "name")?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        val url = MiniJson.str(m, "browser_download_url")?.takeIf { it.isNotEmpty() }
+            ?: return@mapNotNull null
+        UpdateAsset(
+            name = name,
+            size = MiniJson.long(m, "size") ?: 0L,
+            downloadUrl = url,
+            digest = MiniJson.str(m, "digest"),
+        )
+    }
+}
+
+/**
+ * Picks the APK for this release:
+ *  1. `vmdroid-<latestVersion>.apk` (exact),
+ *  2. `vmdroid-<latestVersion>-<anything>.apk` (build-type suffix tolerance,
+ *     e.g. `-debug`),
+ *  3. any other `vmdroid-*.apk` shipped by the release.
+ *
+ * Returns null when the release ships no `vmdroid-*.apk` at all → the caller
+ * degrades to "open the release page".
+ */
+internal fun selectApkAsset(assets: List<UpdateAsset>, latestVersion: String): UpdateAsset? {
+    val candidates = assets.filter { APK_ASSET_PATTERN.matches(it.name) }
+    if (candidates.isEmpty()) return null
+    candidates.firstOrNull { it.name == "vmdroid-$latestVersion.apk" }?.let { return it }
+    candidates.firstOrNull { it.name.startsWith("vmdroid-$latestVersion-") }?.let { return it }
+    return candidates.first()
+}
+
+/**
+ * `digest: "sha256:<hex>"` → lowercase hex. Anything else (absent digest,
+ * another algorithm, malformed hex) → null so the caller can fall back to the
+ * `SHA256SUMS` asset; both unavailable means no automatic download.
+ */
+internal fun sha256FromDigest(digest: String?): String? {
+    val value = digest?.trim() ?: return null
+    if (!value.startsWith("sha256:", ignoreCase = true)) return null
+    return value.substring("sha256:".length).trim().lowercase()
+        .takeIf { SHA256_HEX_PATTERN.matches(it) }
+}
+
+/** One `sha256sum -c` line → (hex, file name); non-matching lines → null. */
+internal fun parseSumsLine(line: String): Pair<String, String>? {
+    val m = SUMS_LINE_PATTERN.matchEntire(line.removeSuffix("\r")) ?: return null
+    return m.groupValues[1] to m.groupValues[2]
+}
+
+/**
+ * Looks up [fileName] in a `SHA256SUMS` body. Tolerates the two standard
+ * layouts — `hash  name` (two spaces, text mode) and `hash *name` (binary
+ * mode) — since `\s+` eats any run of whitespace before the optional `*`.
+ */
+internal fun sha256FromSums(sumsText: String, fileName: String): String? =
+    sumsText.lineSequence()
+        .mapNotNull(::parseSumsLine)
+        .firstOrNull { (_, name) -> name == fileName }
+        ?.first
+        ?.lowercase()
+
+/**
+ * Expected sha256 for [fileName]: GitHub's asset `digest` first, the release's
+ * `SHA256SUMS` body second, null when neither yields a value — the caller must
+ * then refuse the automatic download (fail-closed) and degrade to the release
+ * page rather than installing an unverified APK.
+ */
+internal fun expectedSha256(digest: String?, sumsText: String?, fileName: String): String? =
+    sha256FromDigest(digest) ?: sumsText?.let { sha256FromSums(it, fileName) }
 
 /**
  * Update-check endpoint. Points at this project's own releases (not the
@@ -28,6 +163,16 @@ data class UpdateInfo(
 private val UPDATE_RELEASES_URL: String =
     System.getProperty("vmdroid.updateReleasesUrl")
         ?: "https://api.github.com/repos/ltbkq/vmdroid/releases/latest"
+
+// ---------------------------------------------------------------- 更新偏好（设置页开关）
+// Top-level so the key literals are pinned by tests (see UpdateAssetsTest's
+// key-contract block) — a rename without a migration silently resets the switch.
+
+/** 「自动检查更新」（默认开）。 */
+internal val updateAutoCheckKey = booleanPreferencesKey("update_auto_check")
+
+/** 「自动下载更新」（默认开）。 */
+internal val updateAutoDownloadKey = booleanPreferencesKey("update_auto_download")
 
 /**
  * Returns true when the cache has expired and a fresh network check is warranted.
@@ -138,7 +283,36 @@ class UpdateRepository @Inject constructor(
     // in-app update check for a full day.
     private val retryFloorMs = 20 * 60 * 1000L
 
-    suspend fun checkForUpdate(currentVersion: String): UpdateInfo? = withContext(Dispatchers.IO) {
+    // ---------------------------------------------------------------- 设置（应用更新分区）
+    // Keys live in the shared settings DataStore (same file as SettingsRepository's
+    // keys). Adding keys is always safe; see DataStoreKeyContractTest for why
+    // existing literals must never be renamed.
+
+    /** Home/Settings "自动检查更新" — off means the startup check is skipped entirely. */
+    val autoCheckEnabled: Flow<Boolean> = pref(updateAutoCheckKey, true)
+
+    /** "自动下载更新" — off means an available update is only ever offered, never fetched. */
+    val autoDownloadEnabled: Flow<Boolean> = pref(updateAutoDownloadKey, true)
+
+    /** Version the user explicitly hid ("忽略此版本"); null when nothing was dismissed. */
+    val dismissedVersion: Flow<String?> = context.dataStore.data
+        .catch { e -> if (e is java.io.IOException) emit(emptyPreferences()) else throw e }
+        .map { it[dismissedKey]?.takeIf(String::isNotEmpty) }
+
+    suspend fun setAutoCheckEnabled(value: Boolean) {
+        context.dataStore.edit { it[updateAutoCheckKey] = value }
+    }
+
+    suspend fun setAutoDownloadEnabled(value: Boolean) {
+        context.dataStore.edit { it[updateAutoDownloadKey] = value }
+    }
+
+    private fun <T> pref(key: androidx.datastore.preferences.core.Preferences.Key<T>, default: T): Flow<T> =
+        context.dataStore.data
+            .catch { e -> if (e is java.io.IOException) emit(emptyPreferences()) else throw e }
+            .map { it[key] ?: default }
+
+    suspend fun checkForUpdate(currentVersion: String, force: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
         // Wall-clock time so the 24h gate survives device reboots and deep sleep.
         val now = System.currentTimeMillis()
         var connection: java.net.HttpURLConnection? = null
@@ -147,7 +321,8 @@ class UpdateRepository @Inject constructor(
                 .catch { e -> if (e is java.io.IOException) emit(emptyPreferences()) else throw e }
                 .first()[lastCheckKey] ?: 0L
 
-            if (!shouldCheck(now, lastCheck, cacheValidityMs)) {
+            // force = Settings 的「立即检查」：绕过 24h 缓存门，但仍在完成后记录时间戳。
+            if (!force && !shouldCheck(now, lastCheck, cacheValidityMs)) {
                 return@withContext null
             }
 
@@ -166,12 +341,22 @@ class UpdateRepository @Inject constructor(
             }
 
             val json = connection.inputStream.bufferedReader().use { it.readText() }
-            val obj = JSONObject(json)
+            val root = MiniJson.parseObject(json)
             // removePrefix rather than trimStart — trimStart strips repeated 'v' chars.
-            val tag = obj.optString("tag_name", "").removePrefix("v")
-            val url = obj.optString("html_url", "")
+            val rawTag = MiniJson.str(root, "tag_name") ?: ""
+            val tag = rawTag.removePrefix("v")
+            val url = MiniJson.str(root, "html_url") ?: ""
 
             if (tag.isEmpty() || url.isEmpty()) {
+                context.dataStore.edit { it[lastCheckKey] = now }
+                return@withContext null
+            }
+
+            // Tag guard before isNewer: a non-version tag (`system-images-*` etc.)
+            // means this release is not an app update — ignore it (warning only,
+            // it must not break the check or trip the failure backoff).
+            if (!isReleaseTag(rawTag)) {
+                android.util.Log.w("UpdateRepository", "ignoring non-version release tag: $rawTag")
                 context.dataStore.edit { it[lastCheckKey] = now }
                 return@withContext null
             }
@@ -181,7 +366,36 @@ class UpdateRepository @Inject constructor(
             // Build-type suffix (`-debug`) is decoration, not a prerelease — strip it so
             // 1.1.7-debug compares equal to the 1.1.7 release tag instead of "older".
             val normalizedCurrent = currentVersion.removeSuffix("-debug")
-            if (isNewer(tag, normalizedCurrent)) UpdateInfo(tag, url) else null
+            if (!isNewer(tag, normalizedCurrent)) return@withContext null
+
+            // ---- 资产与完整性（失败一律降级为「打开发布页」，不阻断检查） ----
+            val assets = runCatching { parseReleaseAssets(root) }.getOrElse { e ->
+                android.util.Log.w("UpdateRepository", "release asset parse failed", e)
+                emptyList()
+            }
+            val apk = selectApkAsset(assets, tag)
+            if (apk == null) {
+                android.util.Log.w("UpdateRepository", "release $tag ships no APK asset — degrading to the release page")
+                return@withContext UpdateInfo(tag, url)
+            }
+            var sha256 = sha256FromDigest(apk.digest)
+            if (sha256 == null) {
+                // Fall back to the release's SHA256SUMS file (standard sha256sum -c body).
+                val sums = assets.firstOrNull { it.name.equals("SHA256SUMS", ignoreCase = true) }
+                if (sums != null) {
+                    sha256 = runCatching { fetchText(sums.downloadUrl) }.getOrNull()
+                        ?.let { sha256FromSums(it, apk.name) }
+                }
+            }
+            if (sha256 == null) {
+                // No digest and no usable SHA256SUMS line → refuse the automatic
+                // download (fail-closed) but keep the check itself successful.
+                android.util.Log.w(
+                    "UpdateRepository",
+                    "no integrity value for ${apk.name} (digest/SHA256SUMS) — automatic download disabled for $tag",
+                )
+            }
+            UpdateInfo(tag, url, apk, sha256)
         } catch (c: kotlinx.coroutines.CancellationException) {
             // Coroutine cancellation is not a check failure — don't record a
             // timestamp (which would back off a check the user may retry) and
@@ -203,6 +417,36 @@ class UpdateRepository @Inject constructor(
         }
     }
 
+    /**
+     * Small capped GET used for the release's `SHA256SUMS` (a text asset of a
+     * few hundred bytes). Returns null on any non-2xx/IO failure — the caller
+     * degrades instead of failing the check.
+     */
+    private fun fetchText(url: String): String? {
+        var conn: java.net.HttpURLConnection? = null
+        return try {
+            conn = URL(url).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            if (conn.responseCode !in 200..299) return null
+            conn.inputStream.bufferedReader().use { reader ->
+                val sb = StringBuilder()
+                val buf = CharArray(8192)
+                while (sb.length < MAX_SUMS_BYTES) {
+                    val n = reader.read(buf, 0, minOf(buf.size, MAX_SUMS_BYTES - sb.length))
+                    if (n < 0) break
+                    sb.append(buf, 0, n)
+                }
+                sb.toString()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("UpdateRepository", "SHA256SUMS fetch failed", e)
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
     suspend fun isDismissed(version: String): Boolean {
         // Shield the read so a corrupted store returns "not dismissed" instead of
         // throwing into the caller.
@@ -214,5 +458,10 @@ class UpdateRepository @Inject constructor(
 
     suspend fun dismissUpdate(version: String) {
         context.dataStore.edit { it[dismissedKey] = version }
+    }
+
+    companion object {
+        /** Upper bound for a SHA256SUMS body read (it is ~100 bytes per file). */
+        private const val MAX_SUMS_BYTES = 1 shl 20
     }
 }

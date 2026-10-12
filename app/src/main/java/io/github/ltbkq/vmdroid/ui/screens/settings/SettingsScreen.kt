@@ -73,6 +73,7 @@ import io.github.ltbkq.vmdroid.R
 import io.github.ltbkq.vmdroid.data.repository.MAX_PORT_FORWARD_RULES
 import io.github.ltbkq.vmdroid.data.repository.PortForwardRepository
 import io.github.ltbkq.vmdroid.data.repository.PortForwardRule
+import io.github.ltbkq.vmdroid.data.repository.UpdateState
 import io.github.ltbkq.vmdroid.engine.EngineSelection
 import io.github.ltbkq.vmdroid.engine.VmState
 import io.github.ltbkq.vmdroid.engine.avf.AvfDiagnostics
@@ -126,6 +127,10 @@ fun SettingsScreen(
     val usbPassthrough by viewModel.usbPassthroughEnabled.collectAsStateWithLifecycle()
     val autostartOnBoot by viewModel.autostartOnBoot.collectAsStateWithLifecycle()
     val systemDisk by viewModel.systemDisk.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+    val autoUpdateCheck by viewModel.autoUpdateCheck.collectAsStateWithLifecycle()
+    val autoUpdateDownload by viewModel.autoUpdateDownload.collectAsStateWithLifecycle()
+    val updateMessage by viewModel.updateMessage.collectAsStateWithLifecycle()
 
     // rememberSaveable: changing the language calls activity.recreate(), which
     // would otherwise silently close any open dialog and collapse Advanced.
@@ -204,6 +209,11 @@ fun SettingsScreen(
         val msg = systemDisk.message ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(msg)
         viewModel.clearSystemDiskMessage()
+    }
+    LaunchedEffect(updateMessage) {
+        val msg = updateMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(msg)
+        viewModel.clearUpdateMessage()
     }
 
     Scaffold(
@@ -397,6 +407,21 @@ fun SettingsScreen(
                         enabled = vmNotRunning,
                     )
                 }
+
+                // ── APP UPDATES（v2.0.0 自动更新） ───────────────────
+                UpdateSection(
+                    state = updateState,
+                    currentVersion = BuildConfig.VERSION_NAME,
+                    autoCheck = autoUpdateCheck,
+                    onAutoCheckChange = viewModel::setAutoUpdateCheck,
+                    autoDownload = autoUpdateDownload,
+                    onAutoDownloadChange = viewModel::setAutoUpdateDownload,
+                    onCheckNow = viewModel::checkForUpdateNow,
+                    onDownload = viewModel::downloadUpdate,
+                    onInstall = viewModel::installUpdate,
+                    onOpenPage = viewModel::openReleasePage,
+                    onIgnore = viewModel::ignoreUpdate,
+                )
 
                 // ── ABOUT ─────────────────────────────────────────────
                 // Use lifecycle-aware collection to match the rest of the screen.
@@ -647,6 +672,117 @@ private fun SystemDiskSection(
             top = VmdroidTokens.Spacing.XS,
             bottom = VmdroidTokens.Spacing.SM,
         ),
+    )
+}
+
+/**
+ * 「应用更新」分区（v2.0.0）：当前版本 + 状态行（检查中 / 已是最新 / 可更新 →
+ * 下载中 n% / 已就绪·点击安装 / 下载失败·重试）+ 动作 + 两个开关。
+ * 安装这一步永远需要用户确认 —— Android 没有第三方应用可用的静默安装 API。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UpdateSection(
+    state: UpdateState,
+    currentVersion: String,
+    autoCheck: Boolean,
+    onAutoCheckChange: (Boolean) -> Unit,
+    autoDownload: Boolean,
+    onAutoDownloadChange: (Boolean) -> Unit,
+    onCheckNow: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onOpenPage: () -> Unit,
+    onIgnore: () -> Unit,
+) {
+    VmdroidSectionLabel(stringResource(R.string.update_section))
+    VmdroidListRow(
+        label = stringResource(R.string.update_current_version),
+        value = "v$currentVersion",
+        mono = true,
+    )
+
+    val statusText = when (state) {
+        UpdateState.Idle -> stringResource(R.string.update_status_uptodate)
+        UpdateState.Checking -> stringResource(R.string.update_status_checking)
+        is UpdateState.Available -> stringResource(R.string.update_status_available, state.info.latestVersion)
+        is UpdateState.Downloading -> stringResource(R.string.update_status_downloading, state.percent)
+        is UpdateState.Ready -> stringResource(R.string.update_status_ready)
+        is UpdateState.Failed -> stringResource(R.string.update_status_failed)
+    }
+    val statusColor = when (state) {
+        is UpdateState.Ready -> MaterialTheme.colorScheme.primary
+        is UpdateState.Failed -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(
+        text = statusText,
+        style = MaterialTheme.typography.bodySmall,
+        color = statusColor,
+        modifier = Modifier.padding(
+            start = VmdroidTokens.Spacing.MD,
+            end = VmdroidTokens.Spacing.MD,
+            bottom = VmdroidTokens.Spacing.SM,
+        ),
+    )
+
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = VmdroidTokens.Spacing.SM),
+        horizontalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
+        verticalArrangement = Arrangement.spacedBy(VmdroidTokens.Spacing.SM),
+    ) {
+        VmdroidInlineAction(label = stringResource(R.string.update_check_now), onClick = onCheckNow)
+        when (state) {
+            is UpdateState.Available -> if (state.info.canAutoDownload) {
+                VmdroidInlineAction(label = stringResource(R.string.download), onClick = onDownload)
+            }
+            is UpdateState.Failed -> VmdroidInlineAction(label = stringResource(R.string.update_retry), onClick = onDownload)
+            is UpdateState.Ready -> VmdroidInlineAction(label = stringResource(R.string.update_install), onClick = onInstall)
+            else -> Unit
+        }
+        if (state.info != null) {
+            VmdroidInlineAction(label = stringResource(R.string.update_open_release_page), onClick = onOpenPage)
+            VmdroidInlineAction(label = stringResource(R.string.update_ignore_version), onClick = onIgnore)
+        }
+    }
+
+    if (state is UpdateState.Available && !state.info.canAutoDownload) {
+        // 降级说明：无 APK 资产 / 无校验和 —— 自动下载被拒（fail-closed）。
+        Text(
+            text = stringResource(
+                if (state.info.apk == null) R.string.update_no_apk_hint else R.string.update_no_checksum_hint
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(
+                start = VmdroidTokens.Spacing.MD,
+                end = VmdroidTokens.Spacing.MD,
+                bottom = VmdroidTokens.Spacing.SM,
+            ),
+        )
+    }
+
+    VmdroidListRow(
+        label = stringResource(R.string.update_auto_check),
+        onClick = { onAutoCheckChange(!autoCheck) },
+        rightSlot = {
+            VmdroidSwitch(
+                checked = autoCheck,
+                onCheckedChange = onAutoCheckChange,
+            )
+        },
+    )
+    VmdroidListRow(
+        label = stringResource(R.string.update_auto_download),
+        onClick = { onAutoDownloadChange(!autoDownload) },
+        rightSlot = {
+            VmdroidSwitch(
+                checked = autoDownload,
+                onCheckedChange = onAutoDownloadChange,
+            )
+        },
     )
 }
 

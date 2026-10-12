@@ -245,6 +245,25 @@
     <string name="version_available">Version %1$s is available. You have %2$s.</string>
     <string name="update_open_failed">Couldn\'t open the download page. No browser available?</string>
 
+    <!-- In-app updates (v2.0.0): Settings "App updates" section + Home banner -->
+    <string name="update_section">App updates</string>
+    <string name="update_current_version">Current version</string>
+    <string name="update_status_checking">Checking for updates…</string>
+    <string name="update_status_uptodate">You are on the latest version</string>
+    <string name="update_status_available">Version %1$s is available</string>
+    <string name="update_status_downloading">Downloading update… %1$d%%</string>
+    <string name="update_status_ready">Update downloaded — tap Install to apply it</string>
+    <string name="update_status_failed">Download failed — tap Retry</string>
+    <string name="update_check_now">Check for updates</string>
+    <string name="update_auto_check">Check for updates automatically</string>
+    <string name="update_auto_download">Download updates automatically</string>
+    <string name="update_open_release_page">Open release page</string>
+    <string name="update_install">Install</string>
+    <string name="update_retry">Retry</string>
+    <string name="update_ignore_version">Ignore this version</string>
+    <string name="update_no_apk_hint">This release has no in-app download — open the release page instead.</string>
+    <string name="update_no_checksum_hint">No verified checksum for this release — download it from the release page instead.</string>
+
     <!-- Language -->
     <string name="language_label">Language</string>
     <string name="system_default">System default</string>

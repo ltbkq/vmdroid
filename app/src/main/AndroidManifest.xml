@@ -42,6 +42,11 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- In-app update (v2.0.0): lets the system installer offer "install from
+         this source" for our own downloaded APK. Installation itself is always
+         user-confirmed — Android has no silent-install API for normal apps. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Storage access for persistent container storage -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
