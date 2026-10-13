@@ -166,7 +166,7 @@ QEMU_ARGS=(
     -M virt -cpu max -smp 2 -m 2048
     -bios "$FW"
     -drive "if=virtio,format=raw,file=$STORAGE"
-    -drive "if=virtio,format=raw,file=$IMG"
+    -drive "if=virtio,format=raw,file=$IMG,snapshot=on"
     -display none -serial stdio -monitor none
 )
 ARGV_STR=$(printf '%q ' qemu-system-aarch64 "${QEMU_ARGS[@]}")
