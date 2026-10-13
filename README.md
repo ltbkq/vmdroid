@@ -36,9 +36,9 @@
 
 ## 快速开始
 
-1. 装 APK：Release [`v2.0.1`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.1) →
-   `vmdroid-2.0.1-debug.apk`（`versionCode 36`，`versionName 2.0.1-debug`，内置 QEMU 11.0.4；
-   **从 v1.3.0/v2.0.0 覆盖安装即升级**，应用内也会自动检查更新并静默下载新包 → 一键安装）。
+1. 装 APK：Release [`v2.0.2`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.2) →
+   `vmdroid-2.0.2-debug.apk`（`versionCode 37`，`versionName 2.0.2-debug`，内置 QEMU 11.0.4；
+   **从 v1.3.0/v2.0.x 覆盖安装即升级**，应用内也会自动检查更新并静默下载新包 → 一键安装）。
 2. 打开应用的 **镜像页**：目录自动列出下方 5 个 **v2 镜像**（`catalog.json` + `catalog.json.sig`，
    **ECDSA P-256 验签，失败即拒载**）→ 下载（`.img.zst` 应用内自动解压为稀疏 `.img`）或
    「从文件导入 `.img`」→ 一键激活。v1 旧格式镜像会被标记「旧格式」并拒绝启动，可一键清理。
@@ -119,9 +119,12 @@ UEFI 引导（GRUB/ESP）+ **可写 ext4 根分区** + raw 元数据分区（`VM
 
 - 文档：设计 `docs/DESIGN-disk-image-v2.md` 与规格 `docs/IMAGE-FORMAT-v2.md`（**均已冻结**）·
   测试计划 `docs/TESTPLAN-disk-image-v2.md` · 实测记录 `docs/spikes/M0-runbook.md`
-- **APK 已上架**：Release [`v2.0.1`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.1)
-  （`vmdroid-2.0.1-debug.apk` + `SHA256SUMS`；**含应用自动更新**：自动检查→静默下载→一键安装；
+- **APK 已上架**：Release [`v2.0.2`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.2)
+  （`vmdroid-2.0.2-debug.apk` + `SHA256SUMS`；**含应用自动更新**：自动检查→静默下载→一键安装；
   相比首发版 v2.0.0 另含**真机三连修**，见 M0-runbook 真机实测记录）
+- **启动即终端**（2.0.2）：点"启动虚拟机"直达终端页，UEFI→GRUB→内核→init 控制台
+  **实时滚动直播**（serial 尾缓冲 64 KB + 顶部阶段进度条），就绪后原地切交互 shell，
+  全程无需离开终端页
 - **镜像已上架**：Release [`system-images-v2-2026.10.12`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12)（prerelease，7 资产：五品类 `.img.zst` + schema2 `catalog.json` + 签名；应用默认目录已指向该 tag）
 - 绿线：格式四方对账 25/25 · 应用单测 **487/0**（含自动更新 +37）· v1 selftest 56/0（兼容不倒退）·
   v2 selftest 34/0 · M2 QEMU 四轮 25/25（扩容 R7 meta 回写 → `VERIFY_OK`）·

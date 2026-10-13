@@ -18,15 +18,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -42,6 +45,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -61,6 +65,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -239,13 +244,14 @@ fun TerminalScreen(
             }
 
             is VmState.Starting -> {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = stringResource(R.string.status_starting) + "…",
-                        style = MaterialTheme.typography.displayLarge,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
+                // 启动过程直接在终端页直播：serial 尾缓冲实时滚动（UEFI→GRUB→
+                // 内核→init），Running 后外层 when 切 TerminalSurface 接
+                // terminal.sock 的交互 shell —— 用户点"启动"跳进终端后无需再离开。
+                BootConsoleSurface(
+                    consoleText = viewModel.bootConsole,
+                    bootStage = viewModel.bootStage,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
             }
 
             is VmState.Running -> {
@@ -614,4 +620,68 @@ private fun Modifier.fadingEdgesHorizontal(
             )
         }
     }
+
+/**
+ * 启动中分支的实时控制台。消费 engine.consoleText（serial.sock 尾缓冲，64 KB
+ * 封顶、每次启动清零）把 UEFI→GRUB→内核→init 的原始输出滚动直播，顶部阶段
+ * 条同步 bootStage；boot 到达 Running 后外层 when 切 TerminalSurface 接
+ * terminal.sock 的交互 shell —— 用户点"启动"跳进终端后全程无需离开。
+ */
+@Composable
+private fun BootConsoleSurface(
+    consoleText: StateFlow<String>,
+    bootStage: StateFlow<String>,
+    modifier: Modifier = Modifier,
+) {
+    val text by consoleText.collectAsStateWithLifecycle()
+    val stage by bootStage.collectAsStateWithLifecycle()
+    val scroll = rememberScrollState()
+    // 内核日志洪峰下用瞬时贴底（不走动画防掉帧）；文本为空时不滚，保住"等待中"提示可见。
+    LaunchedEffect(text) { if (text.isNotEmpty()) scroll.scrollTo(scroll.maxValue) }
+    Column(modifier = modifier.background(MaterialTheme.colorScheme.background)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = VmdroidTokens.Spacing.MD,
+                    vertical = VmdroidTokens.Spacing.SM,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.width(VmdroidTokens.Spacing.XS))
+            Text(
+                text = stringResource(R.string.status_starting) + " · " + stage,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(scroll)
+                .padding(
+                    horizontal = VmdroidTokens.Spacing.SM,
+                    vertical = VmdroidTokens.Spacing.XS,
+                ),
+        ) {
+            Text(
+                text = text.ifEmpty { stringResource(R.string.boot_console_waiting) },
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                color = if (text.isEmpty()) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+        }
+    }
+}
 

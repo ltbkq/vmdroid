@@ -67,6 +67,11 @@ class TerminalViewModel @Inject constructor(
 ) : ViewModel() {
 
     val vmState: StateFlow<VmState> = engine.state
+
+    /** 实时启动控制台（serial.sock 尾缓冲 64 KB，每次启动清零）与阶段标签。 */
+    val bootConsole: StateFlow<String> = engine.consoleText
+    val bootStage: StateFlow<String> = engine.bootStage
+
     val terminalFontSize: StateFlow<Int> = settingsRepository.terminalFontSize
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 20)
 

@@ -26,8 +26,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // v2 迭代：磁盘镜像格式 format_version=2 / 目录 schema2 / v1 镜像 LEGACY 拒绝（破坏性，major 对齐）
-        versionCode = 36
-        versionName = "2.0.1"
+        versionCode = 37
+        versionName = "2.0.2"
         buildConfigField("String", "QEMU_VERSION", "\"$vmdroidQemuVersion\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

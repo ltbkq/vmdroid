@@ -283,6 +283,7 @@
     <string name="text_selection_more">More…</string>
     <string name="terminal_title">Terminal</string>
     <string name="vm_not_running_hint">Start the VM from the Home screen first.</string>
+    <string name="boot_console_waiting">Waiting for console output…</string>
     <string name="back_to_home">Back to Home</string>
     <string name="terminal_disconnected_tap_retry">Disconnected. Tap to reconnect.</string>
 
