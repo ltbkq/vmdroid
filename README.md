@@ -13,7 +13,7 @@
 评审规程 [docs/REVIEW.md](docs/REVIEW.md) ·
 测试与整改 [docs/TESTPLAN-system-images.md](docs/TESTPLAN-system-images.md) / [docs/FIXLIST-system-images.md](docs/FIXLIST-system-images.md)
 
-**下载**：[APK Release `v2.0.0`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.0) ·
+**下载**：[APK Release `v2.0.2`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.2) ·
 
 [系统镜像 Release `system-images-v2-2026.10.12`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12)（五品类 `.img.zst` + schema2 `catalog.json`）
 
@@ -21,13 +21,13 @@
 
 ## 核心目的
 
-1. **软件与系统分开** —— VMDroid APK（**v2.0.0**，≈41 MB）只含虚拟机（引擎、终端、VNC、桥接、镜像管理），
+1. **软件与系统分开** —— VMDroid APK（**v2.0.2**，≈47 MB）只含虚拟机（引擎、终端、VNC、桥接、镜像管理），
    **不含任何发行版 rootfs，也不再内置内核/initrd**（v2 起随镜像走）。
 2. **系统可以更换** —— 系统是一个独立的 `.img`（分发为 `.img.zst`，应用内解压为稀疏 `.img`），换系统 = 换文件，
    不重装应用、不改应用代码。新系统**只上架镜像，应用零更新**。
 
 ```
-┌──────── VMDroid APK (v2.0.0 · ≈41 MB) ────┐      ┌── 系统镜像 .img.zst (155–442 MB) ──┐
+┌──────── VMDroid APK (v2.0.2 · ≈47 MB) ────┐      ┌── 系统镜像 .img.zst (155–442 MB) ──┐
 │ VM 引擎(QEMU/AVF) │ UI + 镜像管理器         │      │ GPT 分区表: ESP(GRUB+内核+initrd)  │
 │ 终端/VNC/USB/桥接 │ 签名目录 + zst 安装     │ ───▶ │  + 可写 ext4 根 + meta(VMDIMG02)   │
 │ ★ UEFI(-bios) 启动链 · 启动过程可视化       │      │ 解压为稀疏 .img → vda 数据/vdb 系统 │
@@ -61,7 +61,7 @@
 ## 已发布系统镜像 v2（Release [`system-images-v2-2026.10.12`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-v2-2026.10.12)，**prerelease**）
 
 **v2 完整磁盘镜像**（GPT + UEFI/GRUB + 可写 ext4 根分区），分发 `.img.zst`；
-v2.0.0 应用的默认目录即指向本 Release（应用内下载后自动解压为稀疏 `.img`）。
+v2.0.0+ 应用的默认目录即指向本 Release（应用内下载后自动解压为稀疏 `.img`）。
 
 | `image_id` | 资产 | 体积（`.img.zst`） | 包管理 | PC `Ready!` |
 |---|---|---|---|---|
@@ -77,7 +77,7 @@ v2.0.0 应用的默认目录即指向本 Release（应用内下载后自动解�
 > 构建与发布链：`distro-build/{build-v2-release,test-v2-release,publish-v2}.sh` +
 > `vmdroid-app/build-tools/mkdisk.sh`（v1 工具链已废弃）。
 
-## 已发布系统镜像 v1（Release [`system-images-2026.10.08`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08)，**旧格式——v2.0.0 应用已停止支持**）
+## 已发布系统镜像 v1（Release [`system-images-2026.10.08`](https://github.com/ltbkq/vmdroid/releases/tag/system-images-2026.10.08)，**旧格式——v2.0.0+ 应用已停止支持**）
 
 | `image_id` | 资产 | 体积 | 包管理 | 内置开发工具 | PC `Ready!` |
 |---|---|---|---|---|---|
@@ -110,7 +110,7 @@ v2.0.0 应用的默认目录即指向本 Release（应用内下载后自动解�
 **体积**：2026-10-08 起不再受 ≤150 MB 约束（见 `docs/reviews/IMPLEMENTATION-NOTES.md`），
 仅 `fedora-minimal.img` 保留 **≤500 MB** 硬校验。
 
-## v2 磁盘镜像迭代（APK **2.0.0 / versionCode 35**）
+## v2 磁盘镜像迭代（APK **2.0.2 / versionCode 37**；首发 v2.0.0 / 35）
 
 系统镜像从「裸 squashfs + footer」升级为**标准完整磁盘镜像**：GPT 分区表 + 保护性 MBR +
 UEFI 引导（GRUB/ESP）+ **可写 ext4 根分区** + raw 元数据分区（`VMDIMG02`），分发用 `.img.zst`。
@@ -121,7 +121,7 @@ UEFI 引导（GRUB/ESP）+ **可写 ext4 根分区** + raw 元数据分区（`VM
   测试计划 `docs/TESTPLAN-disk-image-v2.md` · 实测记录 `docs/spikes/M0-runbook.md`
 - **APK 已上架**：Release [`v2.0.2`](https://github.com/ltbkq/vmdroid/releases/tag/v2.0.2)
   （`vmdroid-2.0.2-debug.apk` + `SHA256SUMS`；**含应用自动更新**：自动检查→静默下载→一键安装；
-  相比首发版 v2.0.0 另含**真机三连修**，见 M0-runbook 真机实测记录）
+  相比首发版 v2.0.0 另含**真机三连修**（见 M0-runbook 真机实测记录）与**启动即终端**（见下条））
 - **启动即终端**（2.0.2）：点"启动虚拟机"直达终端页，UEFI→GRUB→内核→init 控制台
   **实时滚动直播**（serial 尾缓冲 64 KB + 顶部阶段进度条），就绪后原地切交互 shell，
   全程无需离开终端页
@@ -197,9 +197,9 @@ local-test.sh           本地「构建 → 装机 → 启动 → 取证」脚�
 | M1-v2 | 格式冻结 + `mkdisk.sh` + 夹具 25 + Kotlin codec 四方对账 + 打包/目录管线 v2 | ✅ 完成 |
 | M2-v2 | `init-podroid v2`（PARTUUID/挂载/扩容+R7 回写）+ QEMU 四轮 25/25 | ✅ 完成（含真 rootfs ready 冒烟 5/5） |
 | M3-v2 | Store/目录/下载/双引擎/启动可视化 切 v2（v1 兼容共存）+ 四项收尾 UI + R8 user.cfg 通道 | ✅ 完成 |
-| M4-v2 | 发布迁移：五品类构建/测试/catalog schema2/上架 + 文档/guide 同步 | ✅ 完成（镜像与 APK 均已上架；真机验证 ⏳ 待设备） |
+| M4-v2 | 发布迁移：五品类构建/测试/catalog schema2/上架 + 文档/guide 同步 | ✅ 完成（镜像与 APK 均已上架；真机全链验证 ✅ 2026-10-13） |
 | M5-v2 | 应用自动更新（静默下载 + 一键安装，487/0） | ✅ 完成（随 `v2.0.0` 上架） |
 | M6 | 真机双后端矩阵回归 + 诊断 UI + 全站四态审计 | 🔄 进行中（本地回归套件全绿，真机矩阵待跑） |
-| M7 | Release、签名、catalog + `.sig`、文档 | ✅ 完成（`v1.3.0` 与 **`v2.0.0`** 均已发布；v2 镜像 Release 亦已上架；CI 待补） |
+| M7 | Release、签名、catalog + `.sig`、文档 | ✅ 完成（`v1.3.0`、**`v2.0.x`**（最新 `v2.0.2`）与 v2 镜像 Release 均已上架；CI 待补） |
 
 详见 [docs/DESIGN.md §14](docs/DESIGN.md)。

@@ -408,3 +408,20 @@ gen_fixtures_v2、docs/TESTPLAN、VmdDiskCodec 头注释等引用已切换；
 
 **教训（harness 新铁律）**：**PC 级镜像测试全绿 ≠ 应用真机链路**——execve/资产布局/平台策略
 类差异必须真机打桩；**run-as 自检会因 SELinux/seccomp 域不同而假通过**，不可替代应用域实测。
+
+## 发布记录（2026-10-13，v2.0.2 启动即终端）
+
+**Release**: https://github.com/ltbkq/vmdroid/releases/tag/v2.0.2（latest，非 prerelease）
+**APK**: `vmdroid-2.0.2-debug.apk`（versionCode 37，49,143,886 B）+ `SHA256SUMS`
+
+**特性**：点"启动虚拟机"（含出错重试）**直达终端页**；Starting 分支由静态占位改为
+`BootConsoleSurface`——实时消费 `engine.consoleText`（serial.sock 尾缓冲 64 KB、每次
+启动清零）滚动直播 UEFI→GRUB→内核→init 原始输出，顶部"启动中 · 阶段"同步 `bootStage`；
+Running 后外层 when 原地切 `TerminalSurface` 交互 shell，全程无需离开终端页。
+
+**真机时间线**（OPPO PKX110）：点火 → 自动跳终端 → ~8 s 滚动至 Configuring
+containers（64 KB 缓冲到顶）→ ~16 s 原地切 `podroid login:` 交互会话；单测 487/0。
+
+**过程修正**：首发误传 `SHA256SUMS-202` 资产 → 删旧传新恢复规范名 `SHA256SUMS`
+（应用自动更新校验与文档 `sha256sum -c SHA256SUMS` 依赖精确命名）；README 全量
+版本引用同步 v2.0.2 / versionCode 37（下载头、核心目的、架构图、M4/M7 状态行）。
