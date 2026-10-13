@@ -425,3 +425,23 @@ containers（64 KB 缓冲到顶）→ ~16 s 原地切 `podroid login:` 交互会
 **过程修正**：首发误传 `SHA256SUMS-202` 资产 → 删旧传新恢复规范名 `SHA256SUMS`
 （应用自动更新校验与文档 `sha256sum -c SHA256SUMS` 依赖精确命名）；README 全量
 版本引用同步 v2.0.2 / versionCode 37（下载头、核心目的、架构图、M4/M7 状态行）。
+
+## 现场记录（2026-10-13，Fedora 44 guest 首次联网实测）
+
+VM 走 QEMU slirp NAT（guest `10.0.2.15`，`192.168.2.21` 是手机 WLAN IP；应用把
+guest:22 转发到手机 `:9922`，PC 直连 `ssh -p 9922 ltbkq@<手机IP>` 即达）。
+
+- **出货 fedora 镜像两缺陷**（真机暴露，均已在用户实例就地修复、写盘持久）：
+  ① 缺 `/home/ltbkq`（10-12 重打包沿用 10-08 旧根，未吃到 10-09 `useradd -m` 修复）
+  → SSH 登录 `Failed chdir` + 普通用户 dnf `filesystem error`；② dnf 官方 fpo 源国内
+  不可用 → 改写阿里云源后 `dnf -y upgrade --refresh` 双仓实拉元数据（35.4+11.7 MB），
+  **Nothing to do（权威）= F44 暂无 updates 包**
+- **构建链根治**：`distro-build` 仓 `5924d7e` —— `finalize-fedora.sh` chroot 内改写
+  阿里云 baseurl（`$MIRROR/updates/$REL/…`；**注意 aliyun 无 fpo 风格
+  `/fedora-updates/released/f44/` 路径，曾 404**）+ `/home/ltbkq` 落地与无 metalink
+  断言；下次重出镜像生效
+- **误判复盘（防再犯）**：`28.0.0.x` 是**可用透明代理**而非 DNS 污染（TUNA 经它 200）；
+  构建机 shell 常挂 HTTP 代理，curl 验证镜像连通性必须 `--noproxy '*'` 看真实终态码
+  （否则只见 CONNECT 隧道行）；`dnf … | tail; echo $?` 的退出码是 tail 的——判 dnf
+  结果要用命令替换捕获
+- Backlog：guest DNS 公共回退国内化（`8.8.8.8/1.1.1.1` → `223.5.5.5` 等），见 README

@@ -203,3 +203,13 @@ local-test.sh           本地「构建 → 装机 → 启动 → 取证」脚�
 | M7 | Release、签名、catalog + `.sig`、文档 | ✅ 完成（`v1.3.0`、**`v2.0.x`**（最新 `v2.0.2`）与 v2 镜像 Release 均已上架；CI 待补） |
 
 详见 [docs/DESIGN.md §14](docs/DESIGN.md)。
+
+**Backlog（不排期，随手记）**：
+
+- **guest DNS 公共回退国内化**（2026-10-13 Fedora guest 联网实测）：`build-rootfs` 的
+  `podroid-network`（`qemu_resolv_conf()`）向 guest 下发的公共 DNS 回退为
+  `8.8.8.8` / `1.1.1.1`（国内不可达，哑回退）；建议改为 `223.5.5.5` / `223.6.6.6`
+  等国内可达项。设备 DHCP 解析器正常时无影响，仅设备解析器缺失/失效时回退路径踩坑。
+- **fedora 镜像重出**（低优）：10-12 发布事故重打包沿用 10-08 旧根，出货镜像缺
+  `/home/ltbkq` 且带 fpo 官方源；构建链已根治（distro-build `5924d7e`：chroot 内改写
+  阿里云源 + home 落地断言），下次重出镜像自动生效。用户当前实例已就地修复。
