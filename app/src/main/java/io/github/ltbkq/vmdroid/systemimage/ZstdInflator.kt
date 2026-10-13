@@ -12,25 +12,24 @@
  * （systemimage-selftest/README §2 的命令不含本文件：只有 gradle 全量编译与本工位的端到端
  * 临时自测会编译它）。
  *
- * ── 解压实现决策（M3，本任务自行拍板，汇报口径）──
+ * ── 解压实现决策（M3 拍板；2026-10-13 真机实证后修订为 jniLibs 分发）──
  * 无纯 JVM zstd 解码器可用：zstd-jni 的 native 库是 glibc 构建，Android bionic 加载不可靠
- * （且引入三方依赖）。因此采用**随 APK 资产分发的静态 `zstd` 可执行文件**：
+ * （且引入三方依赖）。因此采用**随 APK 分发的静态 `zstd` 可执行文件**：
  *
- *   - 资产路径：`app/src/main/assets/bin/zstd`（aarch64 静态构建，**需 CI 补产物**，
- *     本仓库当前不含）→ SystemImageRepository.ensureZstdBinary() 提取到
- *     `filesDir/bin/zstd`（模仿 VmdroidApplication.copyAssetAtomically：tmp+fsync+rename）
- *     并 setExecutable。
- *   - 解析顺序（[ZstdInflator.resolveBinary]）：显式 hint（filesDir/bin/zstd）→
+ *   - 分发路径：`app/src/main/jniLibs/arm64-v8a/libzstdbin.so`（aarch64 静态构建），
+ *     `packaging.jniLibs.useLegacyPackaging=true` → 安装期由 PackageManager 解包到
+ *     `nativeLibraryDir`（system 拥有、0755、可 exec）——与 QEMU 的
+ *     `libqemu-system-aarch64.so` 同机制。
+ *   - **W^X 实证（2026-10-13 真机 error=13）**：Android 10+ 的 untrusted_app 域禁止
+ *     execve 应用可写目录（filesDir）内的文件，原方案 `assets/bin/zstd →
+ *     filesDir/bin/zstd` 真机必 EACCES —— 已按 DESIGN §7.2 T-1 回退方案落地：
+ *     资产迁入 jniLibs，`ensureZstdBinary()` 直接返回 nativeLibraryDir 路径。
+ *   - 解析顺序（[ZstdInflator.resolveBinary]）：显式 hint（nativeLibraryDir/libzstdbin.so）→
  *     `$VMD_ZSTD` → `$PATH` 扫描 → /system/bin、/usr/bin 等固定位置。
- *     **开发期降级**：资产缺失时从 PATH 找 zstd（本机测试用 /usr/bin/zstd）。
+ *     **开发期降级**：native 缺失时从 PATH 找 zstd（本机测试用 /usr/bin/zstd）。
  *   - 执行：`ProcessBuilder(zstd, "-dc")`，stdin 由应用喂源字节（边喂边算 `sha256(zst)`），
  *     stdout 管道由本文件的 [SparseImageWriter] 稀疏落盘 + 流式算 `image_sha256`。
  *     退出码非 0 → 安装失败（`.part` 由 SystemImageStore.install 清理）。
- *
- * 风险（汇报项）：Android 10+ 对 targetSdk≥29 的应用禁止 execve 应用私有目录下可写文件
- * （W^X）。若真机复现 EACCES，回退方案 = 把 zstd 作为预编译共享库放进 `jniLibs/`
- * （nativeLibraryDir 内不可写，可 exec），接口层 [ZstdInflator.resolveBinary] 已按
- * "候选路径列表"设计，无需改调用方。
  */
 package io.github.ltbkq.vmdroid.systemimage
 
@@ -161,8 +160,9 @@ object ZstdInflator {
 
     /**
      * 解析 zstd 可执行文件（见文件头决策）：
-     * [hint]（提取出的资产）→ `$VMD_ZSTD` → `$PATH` → 固定位置。
-     * 找到但缺执行位时尝试 `setExecutable`；最终找不到返回 null。
+     * [hint]（nativeLibraryDir 解包物）→ `$VMD_ZSTD` → `$PATH` → 固定位置。
+     * 找到但缺执行位时尝试 `setExecutable`（nativeLibraryDir 属 system 所有、改不动，
+     * 但解包物本身就是 0755）；最终找不到返回 null。
      */
     @JvmStatic
     @JvmOverloads
@@ -179,7 +179,7 @@ object ZstdInflator {
         candidates += File("/usr/bin/zstd")
         for (c in candidates) {
             if (!c.isFile) continue
-            if (!c.canExecute()) c.setExecutable(true, false) // 资产复制出来默认 0644
+            if (!c.canExecute()) c.setExecutable(true, false) // 复制物默认 0644（仅开发场景走到）
             if (c.canExecute()) return c
         }
         return null
@@ -204,14 +204,22 @@ object ZstdInflator {
         onProgress: ((Long) -> Unit)? = null,
     ): Result {
         val bin = resolveBinary(zstdBinary) ?: throw VmdImageException.of(
-            "zstd executable not found (APK asset assets/bin/zstd not extracted and no zstd on PATH) — " +
+            "zstd executable not found (bundled jniLibs/libzstdbin.so missing and no zstd on PATH) — " +
                 "cannot install a .img.zst system image",
             VmdImageReason.IO_ERROR,
         )
         val proc = try {
             ProcessBuilder(bin.absolutePath, "-dc").start()
         } catch (e: IOException) {
-            throw VmdImageException.of("cannot start '${bin.absolutePath} -dc': ${e.message}", VmdImageReason.IO_ERROR, e)
+            val wx = if (e.message?.contains("error=13") == true) {
+                " [Android W^X: files in the app's writable data dir are not executable; " +
+                    "zstd must live in nativeLibraryDir]"
+            } else ""
+            throw VmdImageException.of(
+                "cannot start '${bin.absolutePath} -dc': ${e.message}$wx",
+                VmdImageReason.IO_ERROR,
+                e,
+            )
         }
 
         // stderr 必须并行排空（zstd 的告警/错误可能撑满管道造成死锁）
@@ -285,8 +293,16 @@ object ZstdInflator {
         // 优先报 zstd 自身的退出码/stderr（源损坏时它才是根因；broken pipe 是派生症状）
         if (code != 0) {
             val errText = String(stderr.toByteArray(), Charsets.UTF_8).take(STDERR_LIMIT).trim()
+            // Android 信号退出 = 128+N：159 → SIGSYS(31)，典型为 seccomp 拦截
+            // （glibc 静态构建在应用域会触发；bionic 静态构建已规避，DESIGN §7.2 T-1）
+            val how = if (code >= 128) {
+                "killed by signal ${code - 128}" +
+                    if (code - 128 == 31) " (SIGSYS: seccomp blocked a syscall?)" else ""
+            } else {
+                "exited with $code"
+            }
             throw VmdImageException.of(
-                "zstd exited with $code while decompressing: $errText",
+                "zstd $how while decompressing: $errText",
                 VmdImageReason.PAYLOAD_CORRUPT,
             )
         }

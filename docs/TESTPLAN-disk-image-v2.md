@@ -107,5 +107,7 @@ tools/m0/p0-1-run.sh                                # 设备接入后
 
 - 真 rootfs `--stage ready` 全绿：需一次 sudo（`unsquashfs` 属主无损 → `pack-v2` → smoke ready）
 - L4/L5 全部：待设备 / 真实 distro 构建
-- CI：`assets/bin/zstd`（aarch64 静态）资产 + Android W^X 真机复测（DESIGN §7.2 T-1）
+- ✅ 已落地（2.0.1）：zstd 随 jniLibs 分发（`jniLibs/arm64-v8a/libzstdbin.so`）；Android W^X
+  真机实证 error=13 → 按 DESIGN §7.2 T-1 回退方案迁移，`assets/bin/zstd` 已移除；
+  glibc 静态 → NDK bionic 静态重编（真机应用域 seccomp SIGSYS/159 实证）
 - TBD-1 方案 b 落地后的用户参数生效回归（dpi/bandwidth/dns/userKernelExtras）

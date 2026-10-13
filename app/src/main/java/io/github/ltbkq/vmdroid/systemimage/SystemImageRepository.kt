@@ -17,7 +17,7 @@
  * v1 镜像由 v2 codec 诊断阶梯判 `LEGACY_FORMAT` → BootGuard 拒绝。新增接口：
  * [install]（显式契约，catalog 工位对接）、[reinstallSystem]（§6.4-B）、[resetData]（§6.4-A）、
  * [growSystemImage]（§6.5）、[markBooted]（§5.4 引擎 stop 刷 dirty 基线）、
- * [ensureZstdBinary]（`assets/bin/zstd` 提取，PATH 降级）。M3 收尾 UI 的辅助只读/删除
+ * [ensureZstdBinary]（jniLibs 解包物 `nativeLibraryDir/libzstdbin.so`，PATH 降级）。M3 收尾 UI 的辅助只读/删除
  * 小接口（不碰 Store 安装/激活/状态机核心）：[listCachedArchives]/[deleteCachedArchive]/
  * [deleteAllCachedArchives]（§6.4 缓存管理）、[isLegacyImage]（§10 v1 遗留判定，
  * `VmdDiskProbe` 只读快检）、[systemDiskSnapshot]（§6.5 扩容控件前置）。
@@ -53,7 +53,6 @@ import io.github.ltbkq.vmdroid.util.NetworkUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.Locale
 import javax.inject.Inject
@@ -100,7 +99,9 @@ class SystemImageRepository @Inject constructor(
             // 全走 VmdDiskCodec；v1 输入由其 §5 诊断阶梯判 LEGACY_FORMAT（BootGuard 拒绝）。
             format = V2SystemImageFormat(
                 versionCode = { versionCode() },
-                zstdBinary = File(context.filesDir, ZSTD_ASSET_PATH),
+                // W^X 实证（2026-10-13 真机 error=13）：hint 必须指向 nativeLibraryDir
+                // （不可写、0755、可 exec）；filesDir 提取物在 untrusted_app 域必 EACCES。
+                zstdBinary = File(context.applicationInfo.nativeLibraryDir, ZSTD_NATIVE_NAME),
             ),
         )
     }
@@ -108,46 +109,34 @@ class SystemImageRepository @Inject constructor(
     /** §7.4 主判定入口（service 启动前调用；引擎内 fail-fast 是兜底）。 */
     fun bootGuard(): BootGuard = BootGuard(store, File(context.filesDir, STORAGE_FILE))
 
-    // ---------------------------------------------------------------- zstd 资产（§6.1 解压器）
+    // ------------------------------------------------------------ zstd 可执行（§6.1 解压器）
 
     /**
-     * §6.1 安装流的解压器：把 APK 资产 `bin/zstd`（aarch64 静态构建，**需 CI 补产物**）
-     * 提取到 `filesDir/bin/zstd` 并加执行位（模仿 VmdroidApplication 的
-     * copyAssetAtomically：tmp + fsync + rename；self-healing stamp 按 lastUpdateTime）。
+     * §6.1 安装流的解压器：返回**可 exec 的 zstd**（缺 → null，调用侧 PATH 降级不阻断）。
      *
-     * 资产缺失（CI 未补 / 开发构建）→ 返回 null，`ZstdInflator` 降级从 PATH 找 zstd
-     * （本机测试用 `/usr/bin/zstd`）；真机两者都没有时安装失败并给出明确报错。
+     * W^X 实证（DESIGN §7.2 T-1，2026-10-13 真机 error=13）：Android 10+ 的
+     * `untrusted_app` 域禁止 execve 应用可写目录（filesDir）内的文件，老路径
+     * `filesDir/bin/zstd` 在真机必失败。已按预案把二进制随 APK 以 **jniLibs** 打包
+     * （`lib/arm64-v8a/libzstdbin.so`；`useLegacyPackaging=true` → 安装期 PackageManager
+     * 解包到 nativeLibraryDir：system 拥有、0755、可 exec——与 QemuEngine 的
+     * `libqemu-system-aarch64.so` 同机制，真机已验证可跑）。
+     *
+     * native 缺失（非 arm64 构建/异常设备）→ null，`ZstdInflator.resolveBinary`
+     * 降级 PATH（开发机/PC 自测用 /usr/bin/zstd）；真机两者都没有时安装失败并给出明确报错。
      */
-    fun ensureZstdBinary(): File? = try {
-        val dst = File(context.filesDir, ZSTD_ASSET_PATH)
-        val stamp = File(dst.parentFile, ZSTD_STAMP)
-        val lastUpdate = runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
-        }.getOrDefault(0L).toString()
-        val current = runCatching { stamp.readText() }.getOrDefault("")
-        if (!dst.isFile || dst.length() == 0L || current != lastUpdate) {
-            dst.parentFile?.mkdirs()
-            val tmp = File(dst.parentFile, dst.name + ".tmp")
-            try {
-                context.assets.open(ZSTD_ASSET).use { ins ->
-                    FileOutputStream(tmp).use { out ->
-                        ins.copyTo(out)
-                        out.flush()
-                        out.fd.sync()
-                    }
-                }
-                if (!tmp.renameTo(dst)) throw java.io.IOException("cannot replace ${dst.absolutePath}")
-            } catch (t: Throwable) {
-                tmp.delete()
-                throw t
-            }
-            runCatching { stamp.writeText(lastUpdate) }
+    fun ensureZstdBinary(): File? {
+        // 清掉 W^X 时代残留（老包提取到 filesDir 的副本不可 exec，留着只会误导排查）
+        runCatching {
+            File(context.filesDir, "bin/zstd").delete()
+            File(context.filesDir, "bin/zstd_stamp").delete()
         }
-        dst.setExecutable(true, false)
-        if (dst.canExecute()) dst else null
-    } catch (t: Throwable) {
-        Log.i(TAG, "bundled zstd not available (${t.message}) — falling back to PATH lookup")
-        null
+        val native = File(context.applicationInfo.nativeLibraryDir, ZSTD_NATIVE_NAME)
+        if (!native.isFile) {
+            Log.w(TAG, "bundled zstd not available (jniLibs/$ZSTD_NATIVE_NAME missing) — falling back to PATH lookup")
+            return null
+        }
+        runCatching { native.setExecutable(true, false) } // 解包后已是 0755；无写权限时失败无碍
+        return native
     }
 
     // ---------------------------------------------------------------- 激活读侧
@@ -255,7 +244,7 @@ class SystemImageRepository @Inject constructor(
 
     /**
      * **M3 安装契约（catalog 工位对接口）**：显式参数、不依赖 `CatalogEntry` 类型。
-     * 触发前先确保 zstd 资产就位（[ensureZstdBinary]，PATH 降级见其 KDoc）。
+     * 触发前先确保 zstd 可执行文件可用（[ensureZstdBinary]，PATH 降级见其 KDoc）。
      *
      * @param source [InstallSource.FileSource]（`cache/<id>.img.zst` 下载产物 /
      *   `reinstallSystem`）或 [InstallSource.Stream]（SAF fd/uri 打开的流）
@@ -266,7 +255,7 @@ class SystemImageRepository @Inject constructor(
         source: InstallSource,
         request: InstallRequest = InstallRequest(),
     ): SystemImageStore.InstalledImage {
-        ensureZstdBinary() // 缺资产时降级 PATH，不阻断
+        ensureZstdBinary() // 缺 native 时降级 PATH，不阻断
         return store.install(source, request)
     }
 
@@ -667,10 +656,8 @@ class SystemImageRepository @Inject constructor(
         const val IMAGE_LOG_FILE = "image.log"
         const val STORAGE_FILE = "storage.img"
 
-        /** §6.1 解压器资产（`assets/bin/zstd` → `filesDir/bin/zstd`；**CI 待补产物**）。 */
-        const val ZSTD_ASSET = "bin/zstd"
-        const val ZSTD_ASSET_PATH = "bin/zstd" // filesDir 下的相对路径（与资产同形）
-        private const val ZSTD_STAMP = "zstd_stamp"
+        /** §6.1 解压器：jniLibs 内的静态 zstd（`lib/arm64-v8a/libzstdbin.so` → nativeLibraryDir）。 */
+        const val ZSTD_NATIVE_NAME = "libzstdbin.so"
 
         /** M4 下载通知渠道（§8.3「通知进度」）。 */
         const val CHANNEL_DOWNLOAD = "image_download"

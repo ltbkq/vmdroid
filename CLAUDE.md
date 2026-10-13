@@ -179,7 +179,7 @@ Single-activity Compose app: `ui/navigation/NavGraph.kt` routes `setup → home 
 │       │   └── ui/                       # Compose: navigation, theme, screens/{setup,home,terminal,settings,x11,status,backup}, components
 │       ├── res/values, res/values-zh/    # strings (EN + Chinese)
 │       ├── assets/                       # vmlinuz-virt, initrd.img, alpine-rootfs.squashfs (all gitignored, built locally — 均为 v1 路径),
-│       │                                 # qemu/ (+ QEMU_EFI.fd v2 UEFI 固件, 2MB, 见其 NOTICE; bin/zstd CI 待补), colors/ (122), fonts/ (13), ui-fonts/
+│       │                                 # qemu/ (+ QEMU_EFI.fd v2 UEFI 固件, 2MB, 见其 NOTICE; zstd 已迁 jniLibs/libzstdbin.so, 见 assets/bin/NOTICE.txt), colors/ (122), fonts/ (13), ui-fonts/
 │       └── jniLibs/arm64-v8a/            # native executables (see below)
 ├── terminal-view/, terminal-emulator/   # vendored Termux fork (local Gradle modules)
 ├── init-podroid                         # initramfs bootstrap (v1): overlay + switch_root

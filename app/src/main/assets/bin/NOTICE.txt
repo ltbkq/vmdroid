@@ -10,45 +10,55 @@ Tarball sha256:
 Target / artifact
 -----------------
 Target:    Android arm64 (aarch64), Linux userspace
-Artifact:  app/src/main/assets/bin/zstd  (this directory's sibling file)
-Binary:    ELF 64-bit LSB executable, ARM aarch64, statically linked,
-           no INTERP segment, no dynamic section / no NEEDED libs
-Size:      1840872 bytes (1,840,872 B ~ 1.76 MiB); built with default (-O3)
-           flags and NOT stripped (already under the 4 MB budget; no -Os
-           and no strip were applied)
+Artifact:  app/src/main/jniLibs/arm64-v8a/libzstdbin.so
+           (this NOTICE stays at assets/bin/NOTICE.txt as the text record)
+Binary:    ELF 64-bit LSB executable, ARM aarch64, statically linked against
+           **bionic** (Android NDK), no INTERP segment, no NEEDED libs
+Size:      3266576 bytes (debug info included; the Android Gradle plugin strips
+           it at packaging — ~1.3 MB lands in the APK)
+Note:      the first build used Ubuntu aarch64-linux-gnu-gcc (glibc) and was
+           killed by the app domain's seccomp policy with SIGSYS (exit code
+           159 = 128+31) during a real-device install; it was rebuilt against
+           bionic so every syscall stays inside Android's app allowlist.
 
-Build commands (exactly as run, on Ubuntu 24.04 host)
-------------------------------------------------------
+Build commands (exactly as run, on Ubuntu 24.04 host — bionic rebuild)
+----------------------------------------------------------------------
   mkdir -p /tmp/opencode/zstd-build && cd /tmp/opencode/zstd-build
   curl -fLLO https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
   sha256sum zstd-1.5.6.tar.gz
   tar xzf zstd-1.5.6.tar.gz
   cd zstd-1.5.6
+  NDK=$ANDROID_SDK/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin
   # NOTE: the release tarball uses lib/ (the git checkout calls it libzstd/)
-  make -C lib libzstd.a -j"$(nproc)" CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar
-  make -C programs zstd CC=aarch64-linux-gnu-gcc LD=aarch64-linux-gnu-gcc \
-      AR=aarch64-linux-gnu-ar LDFLAGS="-static" -j"$(nproc)"
-  # (no -Os, no strip; zstdless/zstdgrep were never built — target "zstd" only)
+  make -C lib libzstd.a -j"$(nproc)" \
+      CC=$NDK/aarch64-linux-android26-clang AR=$NDK/llvm-ar
+  make -C programs zstd -j"$(nproc)" \
+      CC=$NDK/aarch64-linux-android26-clang LD=$NDK/aarch64-linux-android26-clang \
+      AR=$NDK/llvm-ar RANLIB=$NDK/llvm-ranlib LDFLAGS="-static"
+  # (API26 = minSdk; zstdless/zstdgrep never built — target "zstd" only;
+  #  debug symbols stripped by AGP packaging)
 
 Cross-compiler version line:
-  aarch64-linux-gnu-gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+  Android (13624864, +pgo, +bolt, +lto, +mlgo, based on r530567e) clang
+  version 19.0.1 (NDK 28.2.13676358)
 
 Verification (raw results summary)
 ----------------------------------
   file programs/zstd:
-    ELF 64-bit LSB executable, ARM aarch64, version 1 (GNU/Linux),
-    statically linked, BuildID[sha1]=6e0a372691f11a36a2448b6e0a303c2e0a392e69,
-    for GNU/Linux 3.7.0, not stripped
-  readelf -h:  Type: EXEC (Executable file); Machine: AArch64;
-               Entry point address: 0x404500
+    ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV),
+    statically linked, with debug_info, not stripped
+    (strings shows bionic markers, e.g. "android_fdsan_owner_type")
   readelf -l | grep -i interp:  (empty — no INTERP segment)
   readelf -d:  "There is no dynamic section in this file." (no NEEDED deps)
-  Executed locally under qemu-user (qemu-aarch64-static on the build host):
-    - `qemu-aarch64-static ./programs/zstd --version` ->
+  On a real device (OPPO PKX110, Android 16, arm64) via adb:
+    - push to /data/local/tmp + `zstdb -V` ->
       *** Zstandard CLI (64-bit) v1.5.6, by Yann Collet ***
-    - pipe roundtrip `printf vmdroid | zstd -19 | zstd -dc` -> printed: vmdroid
-    - file roundtrip: 300000 random bytes, `zstd -f -19` then `zstd -dc`,
-      cmp identical -> ROUNDTRIP-OK
+    - file roundtrip on device: zstd -f t.bin → t.bin.zst → zstd -dc → "vmdroid"
+    - in-app install flow (untrusted_app domain): the downloaded 206 MB
+      .img.zst streamed through ProcessBuilder(zstd,"-dc") → image installed
+      OK (2.4 GB sparse). This is the step that previously failed twice:
+      glibc build → SIGSYS/exit 159 (seccomp); filesDir copy →
+      EACCES/error 13 (W^X). Both fixed — see DESIGN-disk-image-v2 §7.2 T-1.
 
 Purpose in this app
 -------------------
@@ -58,11 +68,13 @@ subprocess: `ProcessBuilder(zstd, "-dc")` with the compressed source bytes
 fed on stdin (see the header comment of
 app/src/main/java/io/github/ltbkq/vmdroid/systemimage/ZstdInflator.kt).
 
-Asset path:  app/src/main/assets/bin/zstd
-Runtime:     extracted by SystemImageRepository.ensureZstdBinary() into
-             filesDir/bin/zstd and made executable (chmod +x); if the asset
-             is missing, resolution falls back to a zstd found on PATH
-             (development-only fallback).
+Source path: app/src/main/jniLibs/arm64-v8a/libzstdbin.so
+Runtime:     extracted by the package manager at install time into
+             nativeLibraryDir (unwritable by the app, 0755 — executable
+             under Android 10+ W^X rules; the former assets/bin/zstd →
+             filesDir/bin/zstd path was denied with EACCES/error=13 on a
+             real device). When the bundled binary is absent, resolution
+             falls back to a zstd found on PATH (development-only).
 
 License
 -------

@@ -94,7 +94,8 @@ fun snapshotOf(info: VmdDiskCodec.ImageInfo): ImageSnapshot {
  *   与 catalog 比对 → `VmdDiskCodec.read` 结构校验 → 交回 store 原子 rename。
  *
  * @param versionCode 应用 versionCode（APP_TOO_OLD 比较）
- * @param zstdBinary zstd 可执行文件 hint（Android = `filesDir/bin/zstd` 提取物；null → PATH）
+ * @param zstdBinary zstd 可执行文件 hint（Android = `nativeLibraryDir/libzstdbin.so`，jniLibs
+ *   解包物——W^X 下唯一可 exec 的位置；null → PATH）
  */
 class V2SystemImageFormat(
     private val versionCode: () -> Long,

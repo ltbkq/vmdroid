@@ -26,8 +26,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // v2 迭代：磁盘镜像格式 format_version=2 / 目录 schema2 / v1 镜像 LEGACY 拒绝（破坏性，major 对齐）
-        versionCode = 35
-        versionName = "2.0.0"
+        versionCode = 36
+        versionName = "2.0.1"
         buildConfigField("String", "QEMU_VERSION", "\"$vmdroidQemuVersion\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -93,8 +93,9 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
-        // QEMU is an ELF executable packaged as libqemu-system-aarch64.so.
-        // It must be extracted to disk so ProcessBuilder can execute it.
+        // ELF executables shipped as .so (QEMU, zstd): they must be extracted
+        // to nativeLibraryDir at install time so ProcessBuilder can exec them.
+        // filesDir is NOT executable for apps on Android 10+ (W^X, error=13).
         jniLibs {
             useLegacyPackaging = true
         }

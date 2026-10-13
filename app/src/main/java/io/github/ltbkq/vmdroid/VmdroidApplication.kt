@@ -151,7 +151,16 @@ class VmdroidApplication : Application() {
             // can't accumulate or shadow a fresh atomic write.
             deleteStaleTmpFiles(filesDir)
 
-            // Fan out the three top-level extractions across a small thread pool.
+            // 修复（2.0.1 真机实证 NO_UEFI_FIRMWARE）：旧提取 `copyAssetDir("qemu",
+            // filesDir)` 把 assets/qemu/* 摊平到 filesDir 根，而 QemuEngine 按冻结规格
+            // （DESIGN §3 P0-5：`-bios qemu/QEMU_EFI.fd`）查 filesDir/qemu/QEMU_EFI.fd
+            // —— 提取端保留 qemu/ 子目录，并清掉根目录三份遗留拷贝（已无读取方：
+            // NIC `romfile=` 置空不用 ROM，固件只认 qemu/ 路径）。
+            for (legacy in listOf("QEMU_EFI.fd", "QEMU_EFI.fd.NOTICE.txt", "efi-virtio.rom")) {
+                runCatching { File(filesDir, legacy).delete() }
+            }
+
+            // Fan out the extraction tasks across a small thread pool.
             // Disk-write throughput is the bottleneck (the firmware payload),
             // but asset-FD lookup and the skip-when-already-complete check
             // overlap usefully across threads. Runs on a background coroutine
@@ -167,7 +176,8 @@ class VmdroidApplication : Application() {
             // withContext(IO) 调用）。保留这两个任务只会每次启动都
             // `FileNotFoundException` → stamp 永远写不上 → 每次启动都重跑整轮解包。
             val tasks: List<() -> Unit> = listOf(
-                { copyAssetDir("qemu", filesDir, forceCopy) },
+                // destDir = filesDir/qemu：保留资产的 qemu/ 前缀（与 -bios 路径一致）
+                { copyAssetDir("qemu", File(filesDir, "qemu"), forceCopy) },
             )
             val pool = Executors.newFixedThreadPool(tasks.size.coerceAtMost(4))
             var allSucceeded = true

@@ -385,3 +385,26 @@ gen_fixtures_v2、docs/TESTPLAN、VmdDiskCodec 头注释等引用已切换；
    已修：`test-v2-release.sh` L4 改为 `cp --sparse` 拷贝引导；发布事故处置实录 =
    从 `.img.zst` 无损恢复 `.img` → 重生成/重签 catalog → `--clobber` 覆盖远端 catalog/sig →
    远端验签 + 资产↔目录 sha 对账全通（本节上方发布记录的 catalog 即修复版）。
+
+## 真机实测记录（2026-10-13，v2.0.1 三连修 · OPPO PKX110 / Android 16 / arm64）
+
+设备首装 `vmdroid-2.0.0-debug.apk` 后按"下载镜像 → 安装 → 启动"全链实测，连环暴露三处
+仅真机出现的问题（PC 侧 L1–L4 全 PASS 不覆盖应用运行时）：
+
+| # | 现象（用户可见） | 根因 | 修复（均随 2.0.1） |
+|---|---|---|---|
+| 1 | `cannot start '…files/bin/zstd -dc': error=13` | **W^X**（DESIGN §7.2 T-1 预警）：untrusted_app 域禁 exec 应用可写目录内文件（同一文件在 run-as 域可 exec → SELinux 域差异实证） | zstd 迁 `jniLibs/arm64-v8a/libzstdbin.so`（`useLegacyPackaging=true` → nativeLibraryDir 解包 0755，与 libqemu 同机制）；`ensureZstdBinary()` 直返该路径并清理 filesDir 残留；资产 `assets/bin/zstd` 移除 |
+| 2 | `zstd exited with 159`（= 128+31 **SIGSYS**），下载成功但解压中断 | glibc 静态 zstd 调用应用 seccomp 白名单外系统调用 → 内核杀进程（run-as 走 shell seccomp 宽松策略，自检**假通过**） | NDK r28 clang 静态**重编 bionic 版**（syscall 全在应用白名单内）；NOTICE 同步构建命令与真机验证记录；退出码消息区分 signal/exit 并标注 SIGSYS |
+| 3 | 镜像已装好，点启动 → `NO_UEFI_FIRMWARE` | `extractAssets` 用 `copyAssetDir("qemu", filesDir)` 把资产摊平到根，引擎按 P0-5 冻结规格查 `filesDir/qemu/QEMU_EFI.fd`；v2 真机首启才暴露 | 提取改 `copyAssetDir("qemu", filesDir/qemu)` 保子目录 + 清根目录三份遗留（NIC `romfile=` 置空，ROM 无运行时消费方） |
+
+**验证结果（全 PASS）**：
+- 安装链：目录下载 206 MB（缓存复用，未重下）→ bionic zstd 流式解压 → 2.4 GB 稀疏落盘 →
+  `sha256(.img.zst)` + `image_sha256` 双校验 → 结构校验 → **`已安装` 徽标** ✓
+- 启动链：`启动虚拟机` → qemu 进程起 → **UEFI → GRUB → 内核 → 运行中（60s）** →
+  宿主 `tcp:9922 → guest:22` **SSH 端口通** ✓ → 终端页实况：guest 内 `apt update`
+  走 mirrors.aliyun.com 正常拉源（网络/时钟/磁盘/输入全正常）✓
+- 门禁：compile 0 · 单测 **487/0** · assemble 0 · APK `36 / 2.0.1-debug` +
+  `lib/arm64-v8a/libzstdbin.so` + `extractNativeLibs=true` ✓
+
+**教训（harness 新铁律）**：**PC 级镜像测试全绿 ≠ 应用真机链路**——execve/资产布局/平台策略
+类差异必须真机打桩；**run-as 自检会因 SELinux/seccomp 域不同而假通过**，不可替代应用域实测。
